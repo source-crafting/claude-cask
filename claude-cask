@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="claude-cask:latest"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+MODEL="opus"
+SAFE_MODE=0
+EXTRA_ARGS=()
+
+usage() {
+  cat <<'EOF'
+claude-cask - run Claude Code inside a Docker container
+
+USAGE:
+  claude-cask [--model NAME] [--safe] [-- <args passed to claude>]
+
+OPTIONS:
+  --model NAME   Model to use (default: opus)
+  --safe         Disable auto mode (default Claude Code permission prompts)
+  -h, --help     Show this help
+
+The current working directory is mounted at /workspace in the container.
+Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)  MODEL="$2"; shift 2 ;;
+    --safe)   SAFE_MODE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --)       shift; EXTRA_ARGS+=("$@"); break ;;
+    *)        EXTRA_ARGS+=("$1"); shift ;;
+  esac
+done
+
+command -v docker >/dev/null 2>&1 || { echo "claude-cask: docker not found in PATH" >&2; exit 1; }
+
+GIT_NAME="$(git config --global --get user.name  || true)"
+GIT_EMAIL="$(git config --global --get user.email || true)"
+SIGNING_KEY="$(git config --global --get user.signingkey || true)"
+GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
+
+[[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
+[[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  docker build -t "$IMAGE" "$SCRIPT_DIR"
+fi
+
+GPG_MOUNTS=()
+GPG_ENV=()
+TMP_KEY_DIR=""
+
+# shellcheck disable=SC2329  # invoked via trap
+cleanup() {
+  if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
+    rm -rf "$TMP_KEY_DIR"
+  fi
+  return 0
+}
+trap cleanup EXIT
+
+if [[ -n "$SIGNING_KEY" ]]; then
+  TMP_KEY_DIR="$(mktemp -d)"
+  KEY_FILE="$TMP_KEY_DIR/signing-key.asc"
+  if ! gpg --export --armor "$SIGNING_KEY" > "$KEY_FILE" || [[ ! -s "$KEY_FILE" ]]; then
+    echo "claude-cask: failed to export signing key $SIGNING_KEY" >&2
+    exit 1
+  fi
+
+  AGENT_SOCKET="$(gpgconf --list-dirs agent-extra-socket)"
+  if [[ ! -S "$AGENT_SOCKET" ]]; then
+    echo "claude-cask: gpg-agent extra socket not found at $AGENT_SOCKET (is gpg-agent running?)" >&2
+    exit 1
+  fi
+
+  GPG_MOUNTS+=(
+    -v "$KEY_FILE:/tmp/signing-key.asc:ro"
+    -v "$AGENT_SOCKET:/root/.gnupg/S.gpg-agent"
+  )
+  GPG_ENV+=(
+    -e "CLAUDE_CASK_SIGNING_KEY=$SIGNING_KEY"
+    -e "CLAUDE_CASK_GPG_SIGN=$GPG_SIGN"
+  )
+fi
+
+CLAUDE_ARGS=(--model "$MODEL")
+[[ $SAFE_MODE -eq 0 ]] && CLAUDE_ARGS+=(--auto)
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+  CLAUDE_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+
+DOCKER_ARGS=(run --rm -it
+  -v "$PWD:/workspace"
+  -v "$HOME/.claude:/root/.claude"
+  -e "GIT_AUTHOR_NAME=$GIT_NAME"
+  -e "GIT_AUTHOR_EMAIL=$GIT_EMAIL"
+  -e "GIT_COMMITTER_NAME=$GIT_NAME"
+  -e "GIT_COMMITTER_EMAIL=$GIT_EMAIL"
+)
+if [[ ${#GPG_ENV[@]} -gt 0 ]]; then
+  DOCKER_ARGS+=("${GPG_ENV[@]}")
+fi
+if [[ ${#GPG_MOUNTS[@]} -gt 0 ]]; then
+  DOCKER_ARGS+=("${GPG_MOUNTS[@]}")
+fi
+DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
+
+exec docker "${DOCKER_ARGS[@]}"
