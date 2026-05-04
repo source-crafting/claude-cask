@@ -4,9 +4,9 @@ Run Claude Code inside an ephemeral Docker container with the host working direc
 
 ## Requirements
 
-- macOS with Docker Desktop (Linux likely works but isn't a launch target)
+- macOS (Docker Desktop) or Linux with a working Docker daemon
 - `git` configured globally with at least `user.name` and `user.email`
-- For signed commits: `user.signingkey` set and `gpg-agent` running (Docker Desktop must have file sharing enabled for `~/.gnupg`)
+- For signed commits: `user.signingkey` set and `gpg-agent` running. On macOS Docker Desktop, file sharing must include `~/.gnupg`.
 
 ## Install
 
@@ -44,9 +44,25 @@ claude-cask -- --resume my-task   # forward args to claude
 | Host path | Container path | Notes |
 |-----------|----------------|-------|
 | `$PWD` | `/workspace` | Your project. Working directory inside the container. |
-| `~/.claude` | `/root/.claude` | Claude Code config, sessions, plugins. Read-write. |
+| `~/.claude` | `/root/.claude` | Claude Code config dir: settings, sessions, plugins. Read-write. |
+| `~/.claude.json` (if present) | `/root/.claude.json` | Theme and user-level Claude Code config. Read-write. Mount is skipped silently if the host file is absent. |
+| macOS keychain (Darwin only) | `/root/.claude/.credentials.json` (via the dir mount) | Login token, extracted from `security find-generic-password -s "Claude Code-credentials"`. Staged on the host as `~/.claude/.credentials.json` (mode 600) just before launch and removed on exit. On Linux, this step is skipped — host Claude already stores the token in `~/.claude/.credentials.json`, which is carried in by the directory mount. |
 | `gpg-agent` extra socket | `/root/.gnupg/S.gpg-agent` | Signing happens on host; container has no private key access. |
 | Single armored public key | `/tmp/signing-key.asc` (read-only) | Only the configured signing key. |
+
+## Login state
+
+**Linux host.** Host Claude Code already keeps its OAuth token at `~/.claude/.credentials.json`. The existing `~/.claude → /root/.claude` directory mount carries the file straight into the container, so the in-container Claude is logged in with no extra work. Token refreshes inside the container write back to the host file via the RW mount, so they persist naturally — same as the host `claude` would do.
+
+If you've never run host `claude` (no `~/.claude/.credentials.json` exists yet), run `/login` inside the container the first time. It writes to the host file via the mount, and subsequent runs are logged in.
+
+**macOS host.** Claude Code stores its OAuth token in the Keychain rather than in any file. claude-cask extracts it via `security` at launch time, writes it to `~/.claude/.credentials.json` (mode 600) so it's visible in the container via the existing directory mount, and removes the file again on exit.
+
+(A separate file bind-mount inside `/root/.claude/` is not used: Docker Desktop's virtiofs can't stack a file mount inside a directory bind-mount and rejects it with "mountpoint is outside of rootfs".)
+
+If `~/.claude/.credentials.json` already exists on the host, claude-cask leaves it alone and uses it as-is. (A zero-byte file is treated as a stale leftover and overwritten.)
+
+If you also run host `claude` (e.g., for `/login`) occasionally, the keychain stays fresh and claude-cask keeps working. If you only ever use claude-cask, the keychain isn't refreshed — eventually the token rotates and you'll need to run host `claude` once to update the keychain.
 
 ## GPG security model
 
