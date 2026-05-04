@@ -496,17 +496,89 @@ exit 0"
   # be $LINK_DIR and the docker build context would be wrong.
   PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker build -t claude-cask:latest $REPO_ROOT" "$STUB_LOG"
-  ! grep -q "docker build -t claude-cask:latest $LINK_DIR" "$STUB_LOG"
+  grep -q "docker build .*-t claude-cask:latest $REPO_ROOT" "$STUB_LOG"
+  ! grep -q "docker build .*-t claude-cask:latest $LINK_DIR" "$STUB_LOG"
 
   rm -rf "$LINK_DIR"
+}
+
+@test "claude-cask passes host UID/GID as build args when building" {
+  launcher_default_stubs
+  # Force a build by making image-inspect "fail" so the launcher reaches
+  # the build path.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -qE "docker build .*--build-arg USER_UID=$(id -u)" "$STUB_LOG"
+  grep -qE "docker build .*--build-arg USER_GID=$(id -g)" "$STUB_LOG"
+}
+
+@test "claude-cask auto-rebuilds when image label UID/GID differ from host" {
+  launcher_default_stubs
+  # docker stub: image-inspect returns the image, with a "wrong" label that
+  # doesn't match the host UID/GID. The launcher should detect this and
+  # trigger a rebuild.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      # Mimic both inspect calls: the existence check and the label fetch.
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo 999 ;;
+          *claude-cask.gid*) echo 999 ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"image was built for UID/GID 999:999"* ]]
+  grep -q "docker build " "$STUB_LOG"
+}
+
+@test "claude-cask skips rebuild when image label matches host UID/GID" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker build" "$STUB_LOG"
 }
 
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
   [ "$status" -eq 0 ]
-  grep -q "docker build -t claude-cask:latest" "$STUB_LOG"
+  grep -q "docker build .*-t claude-cask:latest" "$STUB_LOG"
 }
 
 @test "claude-cask exits 1 when gpg export is empty" {

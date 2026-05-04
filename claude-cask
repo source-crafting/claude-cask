@@ -82,6 +82,14 @@ done
 
 command -v docker >/dev/null 2>&1 || { echo "claude-cask: docker not found in PATH" >&2; exit 1; }
 
+# The container runs as a non-root user whose UID/GID match the host user
+# so bind-mounted files are owned correctly inside the container. We refuse
+# to run as root because (a) creating a UID-0 user inside the container is
+# nonsensical and (b) the threat model assumes a regular user account.
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+[[ "$HOST_UID" -eq 0 ]] && { echo "claude-cask: refusing to run as root (UID 0)" >&2; exit 1; }
+
 GIT_NAME="$(git config --global --get user.name  || true)"
 GIT_EMAIL="$(git config --global --get user.email || true)"
 SIGNING_KEY="$(git config --global --get user.signingkey || true)"
@@ -90,8 +98,24 @@ GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
 
+# Auto-rebuild when the existing image was built for a different UID/GID
+# (e.g., the user moved this checkout to a different machine). The image is
+# labeled at build time; mismatch means bind-mount ownership won't line up
+# inside the container on native Linux.
+if [[ $REBUILD -eq 0 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  image_uid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.uid" }}' "$IMAGE" 2>/dev/null || true)"
+  image_gid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.gid" }}' "$IMAGE" 2>/dev/null || true)"
+  if [[ "$image_uid" != "$HOST_UID" || "$image_gid" != "$HOST_GID" ]]; then
+    echo "claude-cask: image was built for UID/GID ${image_uid:-?}:${image_gid:-?}, host is $HOST_UID:$HOST_GID — rebuilding" >&2
+    REBUILD=1
+  fi
+fi
+
 if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  docker build -t "$IMAGE" "$SCRIPT_DIR"
+  docker build \
+    --build-arg "USER_UID=$HOST_UID" \
+    --build-arg "USER_GID=$HOST_GID" \
+    -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
 GPG_MOUNTS=()

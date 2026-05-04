@@ -87,11 +87,11 @@ If a variable is unset on the host, it's not forwarded. `TERM` itself is set aut
 
 ## Container user
 
-The container runs as a non-root user `claude-cask` (UID 1000). The base `node:24-slim` image's default `node` user is removed so `claude-cask` can claim UID 1000.
+The container runs as a non-root user `claude-cask` whose **UID/GID match the host user** running the launcher. At image-build time the launcher passes `--build-arg USER_UID=$(id -u) USER_GID=$(id -g)`, the Dockerfile creates the user accordingly (deleting whichever existing user/group occupies that UID/GID — typically the base image's `node` user at 1000), and stamps the image with `claude-cask.uid` / `claude-cask.gid` labels. On subsequent launches the labels are checked against the host UID/GID and a rebuild is triggered automatically if they diverge (e.g., you've moved the checkout to a different machine).
 
-The entrypoint runs briefly as root to set up the gpg-agent socket bridge (see *GPG security model* below), then drops privileges to `claude-cask` via `gosu` and re-execs itself. By the time `claude` actually starts, the process is `claude-cask`.
+The entrypoint runs briefly as root to set up the gpg-agent socket bridge (see *GPG security model* below), then drops privileges to `claude-cask` via `gosu` and re-execs itself. By the time `claude` actually starts, the process is `claude-cask` at the host UID.
 
-On Docker Desktop (macOS), virtiofs handles UID translation transparently — the container user can read/write host bind-mounts regardless of host UID. On native Linux, host file ownership is preserved literally, so for write access to the bind-mounts your host user's UID should also be 1000 (the typical first-user UID).
+This means bind-mounted files are owned by the same UID inside the container as on the host, both on Docker Desktop / macOS (where virtiofs would translate anyway) and on native Linux (where it's the only thing that makes the bind-mounts writable). The launcher refuses to run as host UID 0 (root).
 
 ## GPG security model
 
