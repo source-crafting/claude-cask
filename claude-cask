@@ -37,8 +37,9 @@ while [[ $# -gt 0 ]]; do
     --safe)    SAFE_MODE=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    --)       shift; EXTRA_ARGS+=("$@"); break ;;
-    *)        EXTRA_ARGS+=("$1"); shift ;;
+    --)        shift; EXTRA_ARGS+=("$@"); break ;;
+    -*)        echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
+    *)         EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
 
@@ -76,7 +77,8 @@ trap cleanup EXIT
 if [[ -n "$SIGNING_KEY" ]]; then
   TMP_KEY_DIR="$(mktemp -d)"
   KEY_FILE="$TMP_KEY_DIR/signing-key.asc"
-  if ! gpg --export --armor "$SIGNING_KEY" > "$KEY_FILE" || [[ ! -s "$KEY_FILE" ]]; then
+  if ! gpg --export --armor --export-options export-minimal "$SIGNING_KEY" > "$KEY_FILE" \
+       || [[ ! -s "$KEY_FILE" ]]; then
     echo "claude-cask: failed to export signing key $SIGNING_KEY" >&2
     exit 1
   fi
@@ -147,6 +149,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v security >/dev/null 2>&1; then
       echo "claude-cask: $HOST_CREDS_FILE already exists on host; not overwriting. The in-container Claude will use it as-is." >&2
     else
       mkdir -p "$HOME/.claude"
+      chmod 700 "$HOME/.claude"
       umask_old="$(umask)"
       umask 077
       printf '%s' "$creds_json" > "$HOST_CREDS_FILE"

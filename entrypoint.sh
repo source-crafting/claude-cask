@@ -13,14 +13,26 @@ set -euo pipefail
 if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -S /run/host-gpg-agent ]]; then
     install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
+    # socat must run as root: the bind-mounted host socket is presented by
+    # Docker Desktop as root:root mode 660 inside the container, and the
+    # claude-cask user is not in the root group. Listening side is set up
+    # with explicit ownership/mode so the dropped-privilege user can connect.
     socat \
       "UNIX-LISTEN:/home/claude-cask/.gnupg/S.gpg-agent,fork,reuseaddr,user=claude-cask,group=claude-cask,mode=0600" \
       "UNIX-CONNECT:/run/host-gpg-agent" &
-    # Wait briefly for the socket file to appear before dropping privileges.
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      [[ -S /home/claude-cask/.gnupg/S.gpg-agent ]] && break
+    # Wait up to 5 seconds for the bridge socket to appear; fail loud if not.
+    bridge_ready=0
+    for _ in $(seq 1 50); do
+      if [[ -S /home/claude-cask/.gnupg/S.gpg-agent ]]; then
+        bridge_ready=1
+        break
+      fi
       sleep 0.1
     done
+    if [[ $bridge_ready -eq 0 ]]; then
+      echo "claude-cask: gpg-agent socket bridge failed to start within 5s" >&2
+      exit 1
+    fi
   fi
 
   exec gosu claude-cask "$0" "$@"

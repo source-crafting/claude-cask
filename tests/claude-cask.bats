@@ -196,7 +196,7 @@ exit 0"
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "gpg --export --armor ABCDEF1234567890" "$STUB_LOG"
+  grep -q "gpg --export --armor --export-options export-minimal ABCDEF1234567890" "$STUB_LOG"
   grep -q "gpgconf --list-dirs agent-extra-socket" "$STUB_LOG"
   grep -q "docker run.*-v $AGENT_SOCK:/run/host-gpg-agent" "$STUB_LOG"
   grep -q "docker run.*-e CLAUDE_CASK_SIGNING_KEY=ABCDEF1234567890" "$STUB_LOG"
@@ -387,6 +387,20 @@ echo "Linux"'
   [ "$status" -eq 0 ]
   ! grep -q "docker run.*-e TERM_PROGRAM=" "$STUB_LOG"
   ! grep -q "docker run.*-e COLORTERM=" "$STUB_LOG"
+}
+
+@test "claude-cask exits 2 on unknown launcher flag before --" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --not-a-real-flag
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown flag '--not-a-real-flag'"* ]]
+}
+
+@test "claude-cask still allows unknown flags after --" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" -- --not-a-real-flag value
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*--not-a-real-flag value" "$STUB_LOG"
 }
 
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
