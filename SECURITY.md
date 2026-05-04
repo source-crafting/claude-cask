@@ -64,7 +64,8 @@ These are claude-cask-specific protections that don't exist when you run Claude 
 
 - **Filesystem scope.** Native Claude with auto-mode can write anywhere your user can write (your whole `~`, your other repos, anything). claude-cask bounds it to `$PWD` + `~/.claude` + `~/.claude.json`.
 - **Ephemerality.** The container is `--rm`. Whatever the AI installed, downloaded, or left around in `/tmp`, `/usr`, etc. is gone when you exit. Native Claude has no such guarantee.
-- **Non-root user.** The container runs as `claude-cask` (UID 1000), not root. Defense-in-depth against accidental privilege escalation paths inside the container.
+- **Non-root user.** The container runs as `claude-cask` (UID 1000), not root. Defense-in-depth against accidental privilege escalation paths inside the container. There is no long-running root process inside the container after the entrypoint completes its setup.
+- **Persistence vectors locked down.** `~/.claude/settings.json` and `~/.claude/plugins/` are mounted **read-only** inside the container. The AI cannot plant code that the host's own Claude would execute on subsequent sessions (no editing `enabledPlugins`/`hooks`/`permissions`, no dropping plugin files). The kernel enforces this — writes return `EROFS`.
 - **Single-key GPG.** Only the configured signing key's *public* half is imported into the container's keyring. Private key material never leaves the host. The AI can request signatures (#3 above) but can't see other keys or directly access your keyring.
 - **`--anthropic-only` egress restriction.** Optional kernel-enforced restriction that blocks all outbound network except `api.anthropic.com`. Mitigates exfiltration of anything reachable inside the container — including the OAuth token from #1.
 
@@ -80,7 +81,7 @@ These are claude-cask-specific protections that don't exist when you run Claude 
 The following items are tracked but not yet addressed:
 
 - **Auto-resume of the gpg-agent cache.** No automation to require pinentry per signature; that's a host-side `gpg-agent.conf` decision. We may add a docs note pointing at the setting; we will not modify host config from the launcher.
-- **`~/.claude` is read/write inside the container.** The AI can write plugins, hooks, or settings that affect host Claude on subsequent runs. A future flag could mount this read-only at the cost of breaking Claude's session persistence.
+- ~~**`~/.claude` is read/write inside the container.**~~ ~~The AI can write plugins, hooks, or settings that affect host Claude on subsequent runs.~~ **Resolved:** `~/.claude/settings.json` and `~/.claude/plugins/` are now stacked read-only inside the container. The rest of `~/.claude` remains RW so Claude Code can still record session state. If new persistence vectors are added in future Claude Code (e.g., a top-level `~/.claude/hooks/`), this list will need updating.
 - **No image signing or pinning.** The image is built locally from the Dockerfile in this repo; the base image (`node:24-slim`) is pulled by tag, not by digest. Acceptable for a personal dev tool; would need addressing for distribution.
 - **Limited audit trail.** Tool calls inside the container aren't logged outside Claude Code's own session storage. If you want a record of what the AI did, that's currently in `~/.claude/projects/-workspace/<session-id>.jsonl`.
 

@@ -12,27 +12,13 @@ set -euo pipefail
 # unprivileged section.
 if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -S /run/host-gpg-agent ]]; then
+    # Docker Desktop on macOS presents the bind-mounted host socket as
+    # root:root mode 660 inside the container. chown it to claude-cask so
+    # the unprivileged user can connect, then symlink it to the standard
+    # path in claude-cask's home. No long-running bridge process needed.
     install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
-    # socat must run as root: the bind-mounted host socket is presented by
-    # Docker Desktop as root:root mode 660 inside the container, and the
-    # claude-cask user is not in the root group. Listening side is set up
-    # with explicit ownership/mode so the dropped-privilege user can connect.
-    socat \
-      "UNIX-LISTEN:/home/claude-cask/.gnupg/S.gpg-agent,fork,reuseaddr,user=claude-cask,group=claude-cask,mode=0600" \
-      "UNIX-CONNECT:/run/host-gpg-agent" &
-    # Wait up to 5 seconds for the bridge socket to appear; fail loud if not.
-    bridge_ready=0
-    for _ in $(seq 1 50); do
-      if [[ -S /home/claude-cask/.gnupg/S.gpg-agent ]]; then
-        bridge_ready=1
-        break
-      fi
-      sleep 0.1
-    done
-    if [[ $bridge_ready -eq 0 ]]; then
-      echo "claude-cask: gpg-agent socket bridge failed to start within 5s" >&2
-      exit 1
-    fi
+    chown claude-cask:claude-cask /run/host-gpg-agent
+    ln -sfn /run/host-gpg-agent /home/claude-cask/.gnupg/S.gpg-agent
   fi
 
   # When --anthropic-only was passed, set up a kernel-enforced egress

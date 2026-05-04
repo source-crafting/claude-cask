@@ -1,4 +1,4 @@
-# claude-cask
+REA# claude-cask
 
 Run Claude Code inside an ephemeral Docker container with the host working directory mounted, the host `~/.claude` config forwarded, sensible defaults (Opus + auto mode), and signed commits using exactly one of the host's GPG keys (no private key material exposed to the container).
 
@@ -54,14 +54,14 @@ Claude Code itself works normally — its API calls go through the proxy. Anythi
 
 ## What gets mounted
 
-| Host path | Container path | Notes |
-|-----------|----------------|-------|
-| `$PWD` | `/workspace` | Your project. Working directory inside the container. |
-| `~/.claude` | `/home/claude-cask/.claude` | Claude Code config dir: settings, sessions, plugins. Read-write. |
-| `~/.claude.json` (if present) | `/home/claude-cask/.claude.json` | Theme and user-level Claude Code config. Read-write. Mount is skipped silently if the host file is absent. |
-| macOS keychain (Darwin only) | `/home/claude-cask/.claude/.credentials.json` (via the dir mount) | Login token, extracted from `security find-generic-password -s "Claude Code-credentials"`. Staged on the host as `~/.claude/.credentials.json` (mode 600) just before launch and removed on exit. On Linux, this step is skipped — host Claude already stores the token in `~/.claude/.credentials.json`, which is carried in by the directory mount. |
-| `gpg-agent` extra socket | `/run/host-gpg-agent` (a `socat` bridge inside the container exposes it as `~claude-cask/.gnupg/S.gpg-agent`) | Signing happens on host; container has no private key access. |
-| Single armored public key | `/tmp/signing-key.asc` (read-only) | Only the configured signing key. |
+| Host path                     | Container path                                                                                                | Notes                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$PWD`                        | `/workspace`                                                                                                  | Your project. Working directory inside the container.                                                                                                                                                                                                                                                                                                 |
+| `~/.claude`                   | `/home/claude-cask/.claude`                                                                                   | Claude Code config dir: settings, sessions, plugins. Read-write.                                                                                                                                                                                                                                                                                      |
+| `~/.claude.json` (if present) | `/home/claude-cask/.claude.json`                                                                              | Theme and user-level Claude Code config. Read-write. Mount is skipped silently if the host file is absent.                                                                                                                                                                                                                                            |
+| macOS keychain (Darwin only)  | `/home/claude-cask/.claude/.credentials.json` (via the dir mount)                                             | Login token, extracted from `security find-generic-password -s "Claude Code-credentials"`. Staged on the host as `~/.claude/.credentials.json` (mode 600) just before launch and removed on exit. On Linux, this step is skipped — host Claude already stores the token in `~/.claude/.credentials.json`, which is carried in by the directory mount. |
+| `gpg-agent` extra socket      | `/run/host-gpg-agent` (a `socat` bridge inside the container exposes it as `~claude-cask/.gnupg/S.gpg-agent`) | Signing happens on host; container has no private key access.                                                                                                                                                                                                                                                                                         |
+| Single armored public key     | `/tmp/signing-key.asc` (read-only)                                                                            | Only the configured signing key.                                                                                                                                                                                                                                                                                                                      |
 
 ## Login state
 
@@ -106,26 +106,14 @@ The bridge is needed because Docker Desktop on macOS presents bind-mounted unix 
 
 If `git config --global user.signingkey` is unset, no GPG mounts are added and signing simply isn't available inside the container.
 
-## Security model — what claude-cask does and doesn't do
+## Security
 
-**The sandbox boundary is the container.** Anything Claude does (or anything Claude is convinced to do via prompt injection) is bounded by what's mounted in: `$PWD`, `~/.claude`, `~/.claude.json`, the gpg-agent socket, and the single signing public key. The container is `--rm` and ephemeral.
+claude-cask sandboxes Claude Code so it can work on the project in `$PWD` without reaching the rest of your machine. The full threat model — what the container does and doesn't bound, the nuances of auto-mode, and the per-flag mitigations — is in [SECURITY.md](SECURITY.md). Read it before turning on `--auto`.
 
-**In safe mode (default), every tool call asks for permission.** This is the standard Claude Code behavior. Use this when you're not sure what the AI will do, or when the workspace contains code/data you wouldn't want it to modify without seeing each action first.
-
-**In auto mode (`--auto`), Claude runs tool calls without confirmation.** That's the deliberate trade-off: convenience for the AI to keep working, at the cost of human-in-the-loop on each action. The blast radius is still bounded by the container's mounts and network — but inside that box, the AI can do anything it can do natively. Specifically, in auto mode:
-- The AI's `Read` tool can read `~/.claude/.credentials.json` (the OAuth token). With egress not restricted, that means the token could be exfiltrated. *(This is no different from running host `claude` with auto-mode — same file, same reachability — but worth being explicit.)*
-- The AI's `Bash` and `Edit` tools can modify any file under `$PWD` and `~/.claude`. Writes to `~/.claude/plugins/` or hooks would persist across container exits and affect the host's own Claude Code.
-- The forwarded gpg-agent will sign any data the AI asks it to sign. Signed commits made during the session look identical to ones the user typed by hand.
-
-**Mitigations available in claude-cask:**
-- `--anthropic-only` restricts the container's egress to `api.anthropic.com` only. Claude still works; everything else (any other host, any raw socket) is dropped by iptables. The cleanest mitigation against exfiltration of secrets reachable inside the container.
-- Don't pass `--auto` (default safe mode) — keeps per-tool prompts.
-- The pre-flight summary that prints before each launch is your last chance to notice "wrong directory" or "forgot --anthropic-only."
-
-**What is *not* mitigated:**
-- Without `--anthropic-only`, the AI in auto mode can still read and exfiltrate any file inside the container's mounts.
-- Even with `--anthropic-only`, the AI can sign commits as the user during the session and persist data into `~/.claude` (which the host's own Claude will see).
-- Token rotations made inside the container do not propagate back to the macOS keychain — see *Login state*.
+Quick summary:
+- Default (no flags) is safe mode — Claude prompts for each tool call.
+- `--auto` skips per-tool prompts; the AI runs inside the container's bounds without confirmation.
+- `--anthropic-only` restricts outbound network to `api.anthropic.com` (kernel-enforced via iptables + a tinyproxy allowlist). Pair this with `--auto` for the cleanest mitigation against accidental exfiltration.
 
 ## Tests
 

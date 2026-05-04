@@ -7,7 +7,6 @@ RUN apt-get update \
       ca-certificates \
       curl \
       openssh-client \
-      socat \
       gosu \
       tinyproxy \
       iptables \

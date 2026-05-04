@@ -455,6 +455,34 @@ echo "Linux"'
   grep -q "docker run.*--not-a-real-flag value" "$STUB_LOG"
 }
 
+@test "claude-cask mounts ~/.claude/settings.json read-only when present" {
+  launcher_default_stubs
+  mkdir -p "$HOME/.claude"
+  echo "{}" > "$HOME/.claude/settings.json"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*-v $HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro" "$STUB_LOG"
+}
+
+@test "claude-cask mounts ~/.claude/plugins read-only when present" {
+  launcher_default_stubs
+  mkdir -p "$HOME/.claude/plugins"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*-v $HOME/.claude/plugins:/home/claude-cask/.claude/plugins:ro" "$STUB_LOG"
+}
+
+@test "claude-cask omits settings.json/plugins RO mounts when absent" {
+  launcher_default_stubs
+  # HOME is fresh tmp; neither path exists.
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "settings.json:.*:ro" "$STUB_LOG"
+  ! grep -q "plugins:.*:ro" "$STUB_LOG"
+}
+
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
