@@ -10,7 +10,12 @@ IMAGE="claude-cask:latest"
 # manually for portability across macOS and Linux.
 __cc_resolve_symlink() {
   local target="$1"
+  local hops=0
   while [[ -L "$target" ]]; do
+    if (( hops >= 40 )); then
+      echo "claude-cask: too many symlink hops resolving $1 (cycle?)" >&2
+      exit 1
+    fi
     local link
     link="$(readlink "$target")"
     if [[ "$link" = /* ]]; then
@@ -18,6 +23,7 @@ __cc_resolve_symlink() {
     else
       target="$(dirname "$target")/$link"
     fi
+    ((hops++))
   done
   printf '%s' "$target"
 }
@@ -104,7 +110,10 @@ trap cleanup EXIT
 if [[ -n "$SIGNING_KEY" ]]; then
   TMP_KEY_DIR="$(mktemp -d)"
   KEY_FILE="$TMP_KEY_DIR/signing-key.asc"
-  if ! gpg --export --armor --export-options export-minimal "$SIGNING_KEY" > "$KEY_FILE" \
+  # The "!" suffix tells gpg to match this key exactly (no fuzzy short-ID
+  # collisions). Without it, a short-ID like "62EEA734" could match more
+  # than one key in the host keyring and we'd export all of them.
+  if ! gpg --export --armor --export-options export-minimal "${SIGNING_KEY}!" > "$KEY_FILE" \
        || [[ ! -s "$KEY_FILE" ]]; then
     echo "claude-cask: failed to export signing key $SIGNING_KEY" >&2
     exit 1

@@ -248,7 +248,7 @@ exit 0"
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "gpg --export --armor --export-options export-minimal ABCDEF1234567890" "$STUB_LOG"
+  grep -q "gpg --export --armor --export-options export-minimal ABCDEF1234567890!" "$STUB_LOG"
   grep -q "gpgconf --list-dirs agent-extra-socket" "$STUB_LOG"
   grep -q "docker run.*-v $AGENT_SOCK:/run/host-gpg-agent" "$STUB_LOG"
   grep -q "docker run.*-e CLAUDE_CASK_SIGNING_KEY=ABCDEF1234567890" "$STUB_LOG"
@@ -445,6 +445,22 @@ echo "Linux"'
   [ "$status" -eq 0 ]
   ! grep -q "settings.json:.*:ro" "$STUB_LOG"
   ! grep -q "plugins:.*:ro" "$STUB_LOG"
+}
+
+@test "claude-cask aborts cleanly on a circular launcher symlink" {
+  launcher_default_stubs
+
+  # Build A → B → A. Invoking through either should error within the hop
+  # limit rather than infinite-looping.
+  LINK_DIR="$(mktemp -d)"
+  ln -s "$LINK_DIR/B" "$LINK_DIR/A"
+  ln -s "$LINK_DIR/A" "$LINK_DIR/B"
+
+  PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"too many symlink hops"* ]]
+
+  rm -rf "$LINK_DIR"
 }
 
 @test "claude-cask resolves symlinked launcher path for docker build context" {

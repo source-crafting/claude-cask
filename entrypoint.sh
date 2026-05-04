@@ -60,6 +60,14 @@ EOF
       echo "claude-cask: tinyproxy failed to start on 127.0.0.1:8888 within 5s" >&2
       exit 1
     fi
+    # The poll only confirms that the listening socket appeared at some
+    # point. tinyproxy could have accepted the probe and then crashed before
+    # iptables takes effect, leaving us with restrictions but no proxy. Verify
+    # the daemon is actually still alive via its pid file.
+    if [[ ! -s /run/tinyproxy.pid ]] || ! kill -0 "$(cat /run/tinyproxy.pid)" 2>/dev/null; then
+      echo "claude-cask: tinyproxy started but is no longer running" >&2
+      exit 1
+    fi
 
     # Block all non-loopback OUTPUT except: DNS, established connections,
     # and traffic from the tinyproxy daemon itself.
