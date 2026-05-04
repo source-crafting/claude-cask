@@ -1,6 +1,6 @@
-REA# claude-cask
+# claude-cask
 
-Run Claude Code inside an ephemeral Docker container with the host working directory mounted, the host `~/.claude` config forwarded, sensible defaults (Opus + auto mode), and signed commits using exactly one of the host's GPG keys (no private key material exposed to the container).
+Run Claude Code inside an ephemeral Docker container with the host working directory mounted, the host `~/.claude` config forwarded, Opus by default, safe-mode permission prompts, and signed commits using exactly one of the host's GPG keys (no private key material exposed to the container).
 
 ## Requirements
 
@@ -27,7 +27,13 @@ docker build -t claude-cask:latest .
 claude-cask --rebuild
 ```
 
-After editing `Dockerfile` or `entrypoint.sh`, you must rebuild — the launcher does **not** detect changes on its own (it only auto-builds when the image is missing).
+The launcher detects when the image is stale and rebuilds automatically:
+
+- The Dockerfile and `entrypoint.sh` are hashed at every launch and compared to the image's `claude-cask.image-hash` label. If they differ (you edited either file), the launcher rebuilds.
+- The host UID/GID are compared to the image's `claude-cask.uid`/`claude-cask.gid` labels. If they differ (you've moved the checkout to a different machine), the launcher rebuilds.
+- After every successful rebuild, dangling claude-cask images are auto-pruned (label-scoped, so other dangling images on your daemon are left alone).
+
+You only need `--rebuild` to force a rebuild when nothing has changed (e.g., to refresh `@anthropic-ai/claude-code` from npm).
 
 ## Usage
 
@@ -42,18 +48,20 @@ claude-cask -- --resume my-task   # forward args to claude
 
 **Safe by default.** Without `--auto`, the in-container Claude prompts before each tool call (the standard Claude Code behavior). Pass `--auto` only when you trust the AI to act in this workspace without per-action confirmation. See *Security* below for what changes when you do.
 
-**Pre-flight summary.** Each launch prints a summary of mounts, signing key, network, and mode, and (when stdin is a tty) asks for confirmation. The point is to catch "I'm in the wrong directory" mistakes before the container takes hold of the workspace.
+**Pre-flight summary.** Each launch prints a summary to stderr — workspace path, `~/.claude` mount, signing key, network, mode, and (on macOS) FileVault status — and, when stdin is a tty, asks `Continue? [Y/n]`. The point is to catch "I'm in the wrong directory" mistakes before the container takes hold of the workspace.
+
+**`--keep-container`.** By default `docker run --rm` is used, so when something goes wrong mid-session the container is gone the moment claude exits and there's nothing to `docker logs`. Pass `--keep-container` to drop `--rm` and capture the container id; the launcher prints `docker logs` / `docker inspect` / `docker rm` cleanup hints at exit. You're responsible for `docker rm` when done debugging.
 
 ## What gets mounted
 
-| Host path                     | Container path                                                                                                | Notes                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$PWD`                        | same path inside the container (e.g. `~/projects/foo`)                                                 | Your project. Mounted at the same path so Claude Code's per-project session storage keys off the real path and matches what host `claude` would record. Working directory is also set to it.                                                                                                                                                          |
-| `~/.claude`                   | `/home/claude-cask/.claude`                                                                                   | Claude Code config dir: settings, sessions, plugins. Read-write.                                                                                                                                                                                                                                                                                      |
-| `~/.claude.json` (if present) | `/home/claude-cask/.claude.json`                                                                              | Theme and user-level Claude Code config. Read-write. Mount is skipped silently if the host file is absent.                                                                                                                                                                                                                                            |
+| Host path                     | Container path                                                                                                | Notes                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$PWD`                        | same path inside the container (e.g. `~/projects/foo`)                                                 | Your project. Mounted at the same path so Claude Code's per-project session storage keys off the real path and matches what host `claude` would record. Working directory is also set to it.                                                                                                                                                  |
+| `~/.claude`                   | `/home/claude-cask/.claude`                                                                                   | Claude Code config dir: settings, sessions, plugins. Read-write.                                                                                                                                                                                                                                                                              |
+| `~/.claude.json` (if present) | `/home/claude-cask/.claude.json`                                                                              | Theme and user-level Claude Code config. Read-write. Mount is skipped silently if the host file is absent.                                                                                                                                                                                                                                    |
 | macOS keychain (Darwin only)  | `/home/claude-cask/.claude/.credentials.json` (via the dir mount)                                             | Login token, extracted from `security find-generic-password -s "Claude Code-credentials"` once and written to `~/.claude/.credentials.json` (mode 600) only if that file doesn't already exist. The launcher does not delete it on exit — see SECURITY.md. On Linux, this step is skipped because host Claude already stores the token there. |
-| `gpg-agent` extra socket      | `/run/host-gpg-agent` (a `socat` bridge inside the container exposes it as `~claude-cask/.gnupg/S.gpg-agent`) | Signing happens on host; container has no private key access.                                                                                                                                                                                                                                                                                         |
-| Single armored public key     | `/tmp/signing-key.asc` (read-only)                                                                            | Only the configured signing key.                                                                                                                                                                                                                                                                                                                      |
+| `gpg-agent` extra socket      | `/run/host-gpg-agent`, symlinked into `~claude-cask/.gnupg/S.gpg-agent` after the entrypoint chowns the bind-mount to claude-cask | Signing happens on host; container has no private key access.                                                                                                                                                                                                                                                                                 |
+| Single armored public key     | `/tmp/signing-key.asc` (read-only)                                                                            | Only the configured signing key.                                                                                                                                                                                                                                                                                                              |
 
 ## Login state
 
@@ -81,7 +89,7 @@ If a variable is unset on the host, it's not forwarded. `TERM` itself is set aut
 
 The container runs as a non-root user `claude-cask` whose **UID/GID match the host user** running the launcher. At image-build time the launcher passes `--build-arg USER_UID=$(id -u) USER_GID=$(id -g)`, the Dockerfile creates the user accordingly (deleting whichever existing user/group occupies that UID/GID — typically the base image's `node` user at 1000), and stamps the image with `claude-cask.uid` / `claude-cask.gid` labels. On subsequent launches the labels are checked against the host UID/GID and a rebuild is triggered automatically if they diverge (e.g., you've moved the checkout to a different machine).
 
-The entrypoint runs briefly as root to set up the gpg-agent socket bridge (see *GPG security model* below), then drops privileges to `claude-cask` via `gosu` and re-execs itself. By the time `claude` actually starts, the process is `claude-cask` at the host UID.
+The entrypoint runs briefly as root to chown the bind-mounted gpg-agent socket and symlink it into `~claude-cask/.gnupg/` (see *GPG security model* below), then drops privileges to `claude-cask` via `gosu` and re-execs itself. By the time `claude` actually starts, the process is `claude-cask` at the host UID. No long-running root process remains in the container.
 
 This means bind-mounted files are owned by the same UID inside the container as on the host, both on Docker Desktop / macOS (where virtiofs would translate anyway) and on native Linux (where it's the only thing that makes the bind-mounts writable). The launcher refuses to run as host UID 0 (root).
 
@@ -94,9 +102,7 @@ The container never sees:
 
 The container can sign commits using the host's `gpg-agent` because:
 - Its keyring contains the public key for the one configured signing key
-- The host's `gpg-agent` *extra* socket is bind-mounted at `/run/host-gpg-agent`, and the entrypoint runs a `socat` bridge (as root, before dropping privileges) that exposes it as a `claude-cask`-owned socket at `~claude-cask/.gnupg/S.gpg-agent` mode 600. When the in-container `gpg` (or `git commit -S`) connects to that socket, `socat` proxies the connection to the host's agent, which performs the actual signing. Private keys stay on the host.
-
-The bridge is needed because Docker Desktop on macOS presents bind-mounted unix sockets as `root:root` mode 660 inside the container — the unprivileged `claude-cask` user can't connect to them directly. The bridge adds no capability beyond what the agent's `extra-socket` already grants; it's a transparent byte-for-byte proxy.
+- The host's `gpg-agent` *extra* socket is bind-mounted at `/run/host-gpg-agent`. Docker Desktop on macOS presents that bind-mount as `root:root` mode 660 inside the container, so the entrypoint (running briefly as root) `chown`s it to `claude-cask` and creates a symlink at `~claude-cask/.gnupg/S.gpg-agent`. The unprivileged `claude-cask` user then connects directly to the host's agent through that path. The chown/symlink only changes the container's view; it doesn't touch host-side ownership. No long-running root process or proxy is involved.
 
 If `git config --global user.signingkey` is unset, no GPG mounts are added and signing simply isn't available inside the container.
 
