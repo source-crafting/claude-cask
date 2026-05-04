@@ -447,6 +447,31 @@ echo "Linux"'
   ! grep -q "plugins:.*:ro" "$STUB_LOG"
 }
 
+@test "claude-cask resolves symlinked launcher path for docker build context" {
+  launcher_default_stubs
+
+  # Make image-inspect "fail" so the launcher reaches the build path.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  # Place a symlink to the real launcher into a different directory.
+  LINK_DIR="$(mktemp -d)"
+  ln -s "$REPO_ROOT/claude-cask" "$LINK_DIR/claude-cask"
+
+  # Invoke through the symlink. Without symlink resolution, SCRIPT_DIR would
+  # be $LINK_DIR and the docker build context would be wrong.
+  PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker build -t claude-cask:latest $REPO_ROOT" "$STUB_LOG"
+  ! grep -q "docker build -t claude-cask:latest $LINK_DIR" "$STUB_LOG"
+
+  rm -rf "$LINK_DIR"
+}
+
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild

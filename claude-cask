@@ -2,7 +2,26 @@
 set -euo pipefail
 
 IMAGE="claude-cask:latest"
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Resolve the script path through any symlinks before deriving SCRIPT_DIR.
+# README recommends installing via `ln -s` into /usr/local/bin/, so without
+# this the docker-build context (--rebuild and first-run auto-build) would
+# point at the symlink directory and fail. BSD readlink lacks -f, so do it
+# manually for portability across macOS and Linux.
+__cc_resolve_symlink() {
+  local target="$1"
+  while [[ -L "$target" ]]; do
+    local link
+    link="$(readlink "$target")"
+    if [[ "$link" = /* ]]; then
+      target="$link"
+    else
+      target="$(dirname "$target")/$link"
+    fi
+  done
+  printf '%s' "$target"
+}
+SCRIPT_DIR="$( cd "$( dirname "$(__cc_resolve_symlink "${BASH_SOURCE[0]}")" )" && pwd )"
 
 MODEL="opus"
 AUTO_MODE=0
