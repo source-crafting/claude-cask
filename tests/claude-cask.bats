@@ -198,7 +198,7 @@ exit 0"
   [ "$status" -eq 0 ]
   grep -q "gpg --export --armor ABCDEF1234567890" "$STUB_LOG"
   grep -q "gpgconf --list-dirs agent-extra-socket" "$STUB_LOG"
-  grep -q "docker run.*-v $AGENT_SOCK:/root/.gnupg/S.gpg-agent" "$STUB_LOG"
+  grep -q "docker run.*-v $AGENT_SOCK:/run/host-gpg-agent" "$STUB_LOG"
   grep -q "docker run.*-e CLAUDE_CASK_SIGNING_KEY=ABCDEF1234567890" "$STUB_LOG"
   grep -q "docker run.*-e CLAUDE_CASK_GPG_SIGN=true" "$STUB_LOG"
 }
@@ -272,7 +272,7 @@ exit 0"
   # File must NOT remain on the host after exit.
   [ ! -f "$HOME/.claude/.credentials.json" ]
   # No file-level bind-mount for credentials (avoids the virtiofs stacking bug).
-  ! grep -q "docker run.*-v.*:/root/.claude/.credentials.json" "$STUB_LOG"
+  ! grep -q "docker run.*-v.*:/home/claude-cask/.claude/.credentials.json" "$STUB_LOG"
 }
 
 @test "claude-cask refuses to overwrite a pre-existing non-empty host ~/.claude/.credentials.json" {
@@ -357,7 +357,7 @@ echo "Linux"'
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.*-v $HOME/.claude.json:/root/.claude.json" "$STUB_LOG"
+  grep -q "docker run.*-v $HOME/.claude.json:/home/claude-cask/.claude.json" "$STUB_LOG"
 }
 
 @test "claude-cask does not mount ~/.claude.json when it is absent" {
@@ -365,7 +365,7 @@ echo "Linux"'
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  ! grep -q ".claude.json:/root/.claude.json" "$STUB_LOG"
+  ! grep -q ".claude.json:/home/claude-cask/.claude.json" "$STUB_LOG"
 }
 
 @test "claude-cask --rebuild forces a rebuild even when image exists" {

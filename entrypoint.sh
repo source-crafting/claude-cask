@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# When invoked as root inside the container, do privileged one-time setup:
+#   * If the host's gpg-agent socket has been bind-mounted at
+#     /run/host-gpg-agent, stand up a socat bridge that exposes it as a
+#     claude-cask-owned socket at the standard ~claude-cask/.gnupg/S.gpg-agent
+#     path. Docker Desktop's virtiofs presents the bind-mounted socket as
+#     root:root mode 660, so the unprivileged claude-cask user cannot connect
+#     to it directly — the bridge is the workaround.
+# Then re-exec self under claude-cask via gosu and continue with the
+# unprivileged section.
+if [[ "$(id -u)" -eq 0 ]]; then
+  if [[ -S /run/host-gpg-agent ]]; then
+    install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
+    socat -d \
+      "UNIX-LISTEN:/home/claude-cask/.gnupg/S.gpg-agent,fork,reuseaddr,user=claude-cask,group=claude-cask,mode=0600" \
+      "UNIX-CONNECT:/run/host-gpg-agent" &
+    # Wait briefly for the socket file to appear before dropping privileges.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [[ -S /home/claude-cask/.gnupg/S.gpg-agent ]] && break
+      sleep 0.1
+    done
+  fi
+
+  exec gosu claude-cask "$0" "$@"
+fi
+
+# === unprivileged section (runs as claude-cask) ===
+
 KEY_PATH="${CLAUDE_CASK_KEY_PATH:-/tmp/signing-key.asc}"
 
 if [[ -f "$KEY_PATH" && -n "${CLAUDE_CASK_SIGNING_KEY:-}" ]]; then

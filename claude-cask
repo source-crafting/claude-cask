@@ -89,7 +89,7 @@ if [[ -n "$SIGNING_KEY" ]]; then
 
   GPG_MOUNTS+=(
     -v "$KEY_FILE:/tmp/signing-key.asc:ro"
-    -v "$AGENT_SOCKET:/root/.gnupg/S.gpg-agent"
+    -v "$AGENT_SOCKET:/run/host-gpg-agent"
   )
   GPG_ENV+=(
     -e "CLAUDE_CASK_SIGNING_KEY=$SIGNING_KEY"
@@ -105,7 +105,7 @@ fi
 
 DOCKER_ARGS=(run --rm -it
   -v "$PWD:/workspace"
-  -v "$HOME/.claude:/root/.claude"
+  -v "$HOME/.claude:/home/claude-cask/.claude"
   -e "GIT_AUTHOR_NAME=$GIT_NAME"
   -e "GIT_AUTHOR_EMAIL=$GIT_EMAIL"
   -e "GIT_COMMITTER_NAME=$GIT_NAME"
@@ -113,13 +113,13 @@ DOCKER_ARGS=(run --rm -it
 )
 # Mount the host's primary Claude Code config file (theme etc) when present.
 if [[ -f "$HOME/.claude.json" ]]; then
-  DOCKER_ARGS+=(-v "$HOME/.claude.json:/root/.claude.json")
+  DOCKER_ARGS+=(-v "$HOME/.claude.json:/home/claude-cask/.claude.json")
 fi
 
 # On macOS, Claude Code stores its OAuth token in the Keychain rather than
 # in any file. The Linux Claude Code inside the container reads its token
 # from ~/.claude/.credentials.json. We can't bind-mount the credentials file
-# at /root/.claude/.credentials.json because Docker Desktop's virtiofs cannot
+# at /home/claude-cask/.claude/.credentials.json because Docker Desktop's virtiofs cannot
 # stack a file mount inside a directory bind-mount. Instead, write the
 # credentials directly to the host's $HOME/.claude/.credentials.json (which
 # is then visible inside the container via the existing dir mount), and
