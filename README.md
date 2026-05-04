@@ -64,6 +64,12 @@ If `~/.claude/.credentials.json` already exists on the host, claude-cask leaves 
 
 If you also run host `claude` (e.g., for `/login`) occasionally, the keychain stays fresh and claude-cask keeps working. If you only ever use claude-cask, the keychain isn't refreshed — eventually the token rotates and you'll need to run host `claude` once to update the keychain.
 
+## Terminal compatibility
+
+Claude Code adapts its keybindings (notably Shift/Ctrl+Enter for inserting a newline) based on the terminal program running it. claude-cask forwards `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and `COLORTERM` from the host into the container so the in-container Claude sees the same terminal as on the host (iTerm, Ghostty, VS Code, etc.) and uses matching key sequences.
+
+If a variable is unset on the host, it's not forwarded. `TERM` itself is set automatically by `docker run -t`.
+
 ## Container user
 
 The container runs as a non-root user `claude-cask` (UID 1000). The base `node:24-slim` image's default `node` user is removed so `claude-cask` can claim UID 1000.

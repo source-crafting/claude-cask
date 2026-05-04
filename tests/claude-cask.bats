@@ -368,6 +368,27 @@ echo "Linux"'
   ! grep -q ".claude.json:/home/claude-cask/.claude.json" "$STUB_LOG"
 }
 
+@test "claude-cask forwards terminal env vars when present on host" {
+  launcher_default_stubs
+
+  TERM_PROGRAM=iTerm.app TERM_PROGRAM_VERSION=3.6.10 COLORTERM=truecolor \
+    PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*-e TERM_PROGRAM=iTerm.app" "$STUB_LOG"
+  grep -q "docker run.*-e TERM_PROGRAM_VERSION=3.6.10" "$STUB_LOG"
+  grep -q "docker run.*-e COLORTERM=truecolor" "$STUB_LOG"
+}
+
+@test "claude-cask omits terminal env vars that are unset on host" {
+  launcher_default_stubs
+
+  unset TERM_PROGRAM TERM_PROGRAM_VERSION COLORTERM
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker run.*-e TERM_PROGRAM=" "$STUB_LOG"
+  ! grep -q "docker run.*-e COLORTERM=" "$STUB_LOG"
+}
+
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild

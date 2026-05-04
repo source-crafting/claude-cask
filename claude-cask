@@ -111,6 +111,15 @@ DOCKER_ARGS=(run --rm -it
   -e "GIT_COMMITTER_NAME=$GIT_NAME"
   -e "GIT_COMMITTER_EMAIL=$GIT_EMAIL"
 )
+
+# Forward terminal-identification env vars so Claude Code's keybindings
+# (e.g., Shift/Ctrl+Enter for newline) match the host terminal. Only
+# forwarded when set on the host; unset values are skipped.
+for v in TERM_PROGRAM TERM_PROGRAM_VERSION COLORTERM; do
+  if [[ -n "${!v:-}" ]]; then
+    DOCKER_ARGS+=(-e "$v=${!v}")
+  fi
+done
 # Mount the host's primary Claude Code config file (theme etc) when present.
 if [[ -f "$HOME/.claude.json" ]]; then
   DOCKER_ARGS+=(-v "$HOME/.claude.json:/home/claude-cask/.claude.json")
