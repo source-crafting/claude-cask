@@ -118,7 +118,12 @@ git config --global user.email "$GIT_AUTHOR_EMAIL"
 if [[ -n "${CLAUDE_CASK_SKIP_WORKSPACE_CD:-}" ]]; then
   :
 else
-  cd /workspace
+  # The launcher bind-mounts $PWD at the same in-container path (so per-
+  # project Claude Code sessions key off the host path, not a generic
+  # /workspace). Fall back to /workspace if the env var isn't set, e.g.
+  # when the entrypoint is invoked directly without going through the
+  # launcher (the integration smoke test does this).
+  cd "${CLAUDE_CASK_WORKDIR:-/workspace}"
 fi
 
 exec claude "$@"

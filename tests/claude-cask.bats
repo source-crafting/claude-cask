@@ -447,6 +447,20 @@ echo "Linux"'
   ! grep -q "plugins:.*:ro" "$STUB_LOG"
 }
 
+@test "claude-cask mirrors PWD at the same in-container path (no /workspace collision)" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  # Mount source and target are both $PWD.
+  grep -q "docker run.*-v $PWD:$PWD" "$STUB_LOG"
+  # Working directory inside the container is also $PWD.
+  grep -q "docker run.*-w $PWD" "$STUB_LOG"
+  # And the entrypoint gets the path via env var.
+  grep -q "docker run.*-e CLAUDE_CASK_WORKDIR=$PWD" "$STUB_LOG"
+  # The old /workspace wiring is gone.
+  ! grep -q "docker run.*:/workspace" "$STUB_LOG"
+}
+
 @test "claude-cask aborts cleanly on a circular launcher symlink" {
   launcher_default_stubs
 

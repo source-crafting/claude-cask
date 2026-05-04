@@ -58,7 +58,7 @@ OPTIONS:
   --rebuild         Force-rebuild the claude-cask:latest image before running
   -h, --help        Show this help
 
-The current working directory is mounted at /workspace in the container.
+The current working directory is mounted at the same path inside the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
 
 The image is built automatically on first invocation. After editing
@@ -149,7 +149,14 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
 fi
 
 DOCKER_ARGS=(run --rm -it
-  -v "$PWD:/workspace"
+  # Mount $PWD at the same path inside the container (rather than at a
+  # generic /workspace). Claude Code keys per-project session history off
+  # the cwd; mirroring the host path means projectA at /Users/x/A and
+  # projectB at /Users/x/B get distinct keys, and they line up with what
+  # host `claude` would record for the same paths.
+  -v "$PWD:$PWD"
+  -w "$PWD"
+  -e "CLAUDE_CASK_WORKDIR=$PWD"
   -v "$HOME/.claude:/home/claude-cask/.claude"
   -e "GIT_AUTHOR_NAME=$GIT_NAME"
   -e "GIT_AUTHOR_EMAIL=$GIT_EMAIL"

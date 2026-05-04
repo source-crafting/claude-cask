@@ -6,7 +6,7 @@ claude-cask exists to put a sandbox around Claude Code so the AI can work on **a
 
 Inside the container, Claude can read and write:
 
-- `$PWD` (your project), mounted at `/workspace`
+- `$PWD` (your project), mounted at the same path inside the container so Claude Code's per-project session keys match what host `claude` would record
 - `~/.claude` and `~/.claude.json` (Claude Code's own state — same as on the host)
 - A single forwarded GPG signing key (public half only) and the `gpg-agent` socket
 - The container's own ephemeral filesystem
