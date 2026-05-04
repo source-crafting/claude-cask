@@ -26,10 +26,19 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-# Bake the UID/GID into image labels so the launcher can detect when a
-# rebuild is needed (e.g., the user switched machines).
+# Hash of (Dockerfile + entrypoint.sh) — i.e., everything in the build
+# context per .dockerignore. The launcher computes this hash at every
+# invocation, passes it via --build-arg, and inspects the label below
+# to decide whether the image is stale relative to the source. Empty
+# by default so direct `docker build` invocations don't fail.
+ARG IMAGE_HASH=""
+
+# Bake the metadata into image labels so the launcher can detect when
+# a rebuild is needed (UID/GID drift after switching machines, source
+# drift after editing Dockerfile or entrypoint).
 LABEL claude-cask.uid="${USER_UID}"
 LABEL claude-cask.gid="${USER_GID}"
+LABEL claude-cask.image-hash="${IMAGE_HASH}"
 
 # Free up the requested UID/GID by removing whichever user/group currently
 # owns it (e.g., the base image's `node` user at UID 1000), then create

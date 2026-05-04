@@ -538,7 +538,7 @@ echo "Linux"'
   [[ "$output" != *"filevault:"* ]]
 }
 
-@test "claude-cask passes host UID/GID as build args when building" {
+@test "claude-cask passes host UID/GID and source hash as build args when building" {
   launcher_default_stubs
   # Force a build by making image-inspect "fail" so the launcher reaches
   # the build path.
@@ -553,6 +553,37 @@ exit 0"
   [ "$status" -eq 0 ]
   grep -qE "docker build .*--build-arg USER_UID=$(id -u)" "$STUB_LOG"
   grep -qE "docker build .*--build-arg USER_GID=$(id -g)" "$STUB_LOG"
+  grep -qE "docker build .*--build-arg IMAGE_HASH=[0-9a-f]{64}" "$STUB_LOG"
+}
+
+@test "claude-cask auto-rebuilds when image source-hash differs from current Dockerfile/entrypoint" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  # docker stub: image exists, UID/GID labels match host, but image-hash
+  # label is a stale value that doesn't match the current source.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dockerfile or entrypoint.sh changed since last build"* ]]
+  grep -q "docker build " "$STUB_LOG"
 }
 
 @test "claude-cask auto-rebuilds when image label UID/GID differ from host" {
@@ -584,10 +615,11 @@ exit 0"
   grep -q "docker build " "$STUB_LOG"
 }
 
-@test "claude-cask skips rebuild when image label matches host UID/GID" {
+@test "claude-cask skips rebuild when all labels match (UID/GID + image-hash)" {
   launcher_default_stubs
   HU="$(id -u)"
   HG="$(id -g)"
+  HH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
   stub_set docker "#!/usr/bin/env bash
 echo \"docker \$@\" >> \"\$STUB_LOG\"
 case \"\$1\" in
@@ -597,6 +629,7 @@ case \"\$1\" in
         case \"\$4\" in
           *claude-cask.uid*) echo $HU ;;
           *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo $HH ;;
         esac
       fi
       exit 0

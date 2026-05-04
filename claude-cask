@@ -98,15 +98,23 @@ GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
 
-# Auto-rebuild when the existing image was built for a different UID/GID
-# (e.g., the user moved this checkout to a different machine). The image is
-# labeled at build time; mismatch means bind-mount ownership won't line up
-# inside the container on native Linux.
+# Hash the contents of the build context (per .dockerignore: Dockerfile +
+# entrypoint.sh). If the hash recorded in the existing image's label
+# doesn't match what's on disk now, the image is stale and we rebuild.
+SRC_HASH="$(cat "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+
+# Auto-rebuild when the existing image is stale relative to the host:
+# either the user/group don't match (UID drift after switching machines)
+# or the Dockerfile/entrypoint have been edited since the last build.
 if [[ $REBUILD -eq 0 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
   image_uid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.uid" }}' "$IMAGE" 2>/dev/null || true)"
   image_gid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.gid" }}' "$IMAGE" 2>/dev/null || true)"
+  image_hash="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.image-hash" }}' "$IMAGE" 2>/dev/null || true)"
   if [[ "$image_uid" != "$HOST_UID" || "$image_gid" != "$HOST_GID" ]]; then
     echo "claude-cask: image was built for UID/GID ${image_uid:-?}:${image_gid:-?}, host is $HOST_UID:$HOST_GID — rebuilding" >&2
+    REBUILD=1
+  elif [[ "$image_hash" != "$SRC_HASH" ]]; then
+    echo "claude-cask: Dockerfile or entrypoint.sh changed since last build — rebuilding" >&2
     REBUILD=1
   fi
 fi
@@ -115,6 +123,7 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build \
     --build-arg "USER_UID=$HOST_UID" \
     --build-arg "USER_GID=$HOST_GID" \
+    --build-arg "IMAGE_HASH=$SRC_HASH" \
     -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
