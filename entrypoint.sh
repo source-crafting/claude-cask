@@ -35,7 +35,65 @@ if [[ "$(id -u)" -eq 0 ]]; then
     fi
   fi
 
+  # When --anthropic-only was passed, set up a kernel-enforced egress
+  # restriction: an HTTPS proxy that allowlists api.anthropic.com, plus
+  # iptables OUTPUT rules that block every other outbound except via the
+  # proxy. The unprivileged claude-cask user can only reach the network
+  # through the proxy, which only forwards to api.anthropic.com.
+  if [[ "${CLAUDE_CASK_NETWORK_MODE:-}" == "anthropic-only" ]]; then
+    cat > /etc/tinyproxy/tinyproxy.conf <<'EOF'
+User tinyproxy
+Group tinyproxy
+Port 8888
+Listen 127.0.0.1
+Timeout 600
+LogLevel Info
+PidFile "/run/tinyproxy.pid"
+MaxClients 100
+Allow 127.0.0.1
+Filter "/etc/tinyproxy/filter"
+FilterDefaultDeny Yes
+FilterExtended On
+ConnectPort 443
+EOF
+    cat > /etc/tinyproxy/filter <<'EOF'
+^api\.anthropic\.com$
+EOF
+
+    tinyproxy -c /etc/tinyproxy/tinyproxy.conf
+
+    proxy_ready=0
+    for _ in $(seq 1 50); do
+      if (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null; then
+        proxy_ready=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ $proxy_ready -eq 0 ]]; then
+      echo "claude-cask: tinyproxy failed to start on 127.0.0.1:8888 within 5s" >&2
+      exit 1
+    fi
+
+    # Block all non-loopback OUTPUT except: DNS, established connections,
+    # and traffic from the tinyproxy daemon itself.
+    iptables -P OUTPUT DROP
+    iptables -A OUTPUT -o lo -j ACCEPT
+    iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -A OUTPUT -m owner --uid-owner tinyproxy -j ACCEPT
+  fi
+
   exec gosu claude-cask "$0" "$@"
+fi
+
+# Inherited proxy env so the unprivileged claude-cask user routes through
+# the in-container proxy (which is the only path out under --anthropic-only).
+if [[ "${CLAUDE_CASK_NETWORK_MODE:-}" == "anthropic-only" ]]; then
+  export HTTPS_PROXY="http://127.0.0.1:8888"
+  export HTTP_PROXY="http://127.0.0.1:8888"
+  export NO_PROXY="localhost,127.0.0.1"
 fi
 
 # === unprivileged section (runs as claude-cask) ===

@@ -92,36 +92,88 @@ exit 0'
   [ "$status" -eq 0 ]
   [[ "$output" == *"USAGE:"* ]]
   [[ "$output" == *"--model"* ]]
-  [[ "$output" == *"--safe"* ]]
+  [[ "$output" == *"--auto"* ]]
+  [[ "$output" == *"--anthropic-only"* ]]
 }
 
-@test "claude-cask defaults to --model opus and --permission-mode auto" {
+@test "claude-cask defaults to --permission-mode default (overrides host settings)" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode default" "$STUB_LOG"
+  ! grep -q "docker run.* --permission-mode auto" "$STUB_LOG"
 }
 
-@test "claude-cask --safe omits --permission-mode auto" {
+@test "claude-cask --auto sets --permission-mode auto" {
   launcher_default_stubs
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --safe
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --auto
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus" "$STUB_LOG"
-  ! grep -q "docker run.* --permission-mode" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
+  ! grep -q "docker run.* --permission-mode default" "$STUB_LOG"
+}
+
+@test "claude-cask --anthropic-only adds NET_ADMIN cap and network env" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --anthropic-only
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* --cap-add NET_ADMIN" "$STUB_LOG"
+  grep -q "docker run.* -e CLAUDE_CASK_NETWORK_MODE=anthropic-only" "$STUB_LOG"
+}
+
+@test "claude-cask without --anthropic-only does not add NET_ADMIN" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker run.* --cap-add" "$STUB_LOG"
+  ! grep -q "CLAUDE_CASK_NETWORK_MODE" "$STUB_LOG"
 }
 
 @test "claude-cask --model honors override" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --model sonnet
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model sonnet --permission-mode auto" "$STUB_LOG"
+  grep -q "docker run.* --model sonnet" "$STUB_LOG"
 }
 
 @test "claude-cask passes through args after --" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" -- --resume foo
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --permission-mode auto --resume foo" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode default --resume foo" "$STUB_LOG"
+}
+
+@test "claude-cask prints pre-flight summary with workspace and mode" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"workspace:"* ]]
+  [[ "$output" == *"~/.claude:"* ]]
+  [[ "$output" == *"mode:"* ]]
+  [[ "$output" == *"safe"* ]]
+}
+
+@test "claude-cask summary reflects --auto flag" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --auto
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"mode:"* ]]
+  [[ "$output" == *"auto"* ]]
+}
+
+@test "claude-cask summary reflects --anthropic-only flag" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --anthropic-only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"network:"* ]]
+  [[ "$output" == *"anthropic-only"* ]]
+}
+
+@test "claude-cask skips pre-flight prompt when stdin is not a tty" {
+  launcher_default_stubs
+  # bats run does not allocate a tty, so [[ -t 0 ]] is false → no prompt.
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Continue?"* ]]
 }
 
 @test "claude-cask exits 1 when docker is missing" {

@@ -32,12 +32,25 @@ After editing `Dockerfile` or `entrypoint.sh`, you must rebuild — the launcher
 ## Usage
 
 ```bash
-claude-cask                       # Opus + auto mode
+claude-cask                       # Opus + safe mode (per-tool prompts apply)
+claude-cask --auto                # opt into auto mode (no per-tool prompts)
 claude-cask --model sonnet        # different model
-claude-cask --safe                # default permission prompts (omits --permission-mode auto)
+claude-cask --anthropic-only      # restrict egress: only api.anthropic.com is reachable
 claude-cask --rebuild             # rebuild the image before running
 claude-cask -- --resume my-task   # forward args to claude
 ```
+
+**Safe by default.** Without `--auto`, the in-container Claude prompts before each tool call (the standard Claude Code behavior). Pass `--auto` only when you trust the AI to act in this workspace without per-action confirmation. See *Security* below for what changes when you do.
+
+**Pre-flight summary.** Each launch prints a summary of mounts, signing key, network, and mode, and (when stdin is a tty) asks for confirmation. The point is to catch "I'm in the wrong directory" mistakes before the container takes hold of the workspace.
+
+**Restricted egress (`--anthropic-only`).** Only `api.anthropic.com` is reachable from inside the container. Everything else — `example.com`, `pastebin.com`, raw TCP to arbitrary IPs, the works — is dropped at the kernel level by iptables, so even tools that ignore `HTTPS_PROXY` (or that try raw sockets) can't get out.
+
+Implementation: a small in-container HTTPS proxy ([tinyproxy](https://tinyproxy.github.io/)) is configured with a one-line allowlist (`^api\.anthropic\.com$`). iptables drops all OUTPUT except (a) loopback, (b) DNS, (c) established connections, and (d) traffic from the proxy's UID. The unprivileged `claude-cask` user has no other path out — its only way to reach the network is `HTTPS_PROXY=http://127.0.0.1:8888`, which only forwards to Anthropic.
+
+This requires `--cap-add=NET_ADMIN` (granted automatically by the launcher when this flag is set; not granted otherwise).
+
+Claude Code itself works normally — its API calls go through the proxy. Anything else the AI tries to reach is blocked.
 
 ## What gets mounted
 
@@ -92,6 +105,27 @@ The container can sign commits using the host's `gpg-agent` because:
 The bridge is needed because Docker Desktop on macOS presents bind-mounted unix sockets as `root:root` mode 660 inside the container — the unprivileged `claude-cask` user can't connect to them directly. The bridge adds no capability beyond what the agent's `extra-socket` already grants; it's a transparent byte-for-byte proxy.
 
 If `git config --global user.signingkey` is unset, no GPG mounts are added and signing simply isn't available inside the container.
+
+## Security model — what claude-cask does and doesn't do
+
+**The sandbox boundary is the container.** Anything Claude does (or anything Claude is convinced to do via prompt injection) is bounded by what's mounted in: `$PWD`, `~/.claude`, `~/.claude.json`, the gpg-agent socket, and the single signing public key. The container is `--rm` and ephemeral.
+
+**In safe mode (default), every tool call asks for permission.** This is the standard Claude Code behavior. Use this when you're not sure what the AI will do, or when the workspace contains code/data you wouldn't want it to modify without seeing each action first.
+
+**In auto mode (`--auto`), Claude runs tool calls without confirmation.** That's the deliberate trade-off: convenience for the AI to keep working, at the cost of human-in-the-loop on each action. The blast radius is still bounded by the container's mounts and network — but inside that box, the AI can do anything it can do natively. Specifically, in auto mode:
+- The AI's `Read` tool can read `~/.claude/.credentials.json` (the OAuth token). With egress not restricted, that means the token could be exfiltrated. *(This is no different from running host `claude` with auto-mode — same file, same reachability — but worth being explicit.)*
+- The AI's `Bash` and `Edit` tools can modify any file under `$PWD` and `~/.claude`. Writes to `~/.claude/plugins/` or hooks would persist across container exits and affect the host's own Claude Code.
+- The forwarded gpg-agent will sign any data the AI asks it to sign. Signed commits made during the session look identical to ones the user typed by hand.
+
+**Mitigations available in claude-cask:**
+- `--anthropic-only` restricts the container's egress to `api.anthropic.com` only. Claude still works; everything else (any other host, any raw socket) is dropped by iptables. The cleanest mitigation against exfiltration of secrets reachable inside the container.
+- Don't pass `--auto` (default safe mode) — keeps per-tool prompts.
+- The pre-flight summary that prints before each launch is your last chance to notice "wrong directory" or "forgot --anthropic-only."
+
+**What is *not* mitigated:**
+- Without `--anthropic-only`, the AI in auto mode can still read and exfiltrate any file inside the container's mounts.
+- Even with `--anthropic-only`, the AI can sign commits as the user during the session and persist data into `~/.claude` (which the host's own Claude will see).
+- Token rotations made inside the container do not propagate back to the macOS keychain — see *Login state*.
 
 ## Tests
 

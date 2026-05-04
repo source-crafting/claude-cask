@@ -5,9 +5,12 @@ RUN apt-get update \
       git \
       gnupg \
       ca-certificates \
+      curl \
       openssh-client \
       socat \
       gosu \
+      tinyproxy \
+      iptables \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code

@@ -5,7 +5,8 @@ IMAGE="claude-cask:latest"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 MODEL="opus"
-SAFE_MODE=0
+AUTO_MODE=0
+ANTHROPIC_ONLY=0
 REBUILD=0
 EXTRA_ARGS=()
 
@@ -14,13 +15,23 @@ usage() {
 claude-cask - run Claude Code inside a Docker container
 
 USAGE:
-  claude-cask [--model NAME] [--safe] [--rebuild] [-- <args passed to claude>]
+  claude-cask [--model NAME] [--auto] [--anthropic-only] [--rebuild]
+              [-- <args passed to claude>]
 
 OPTIONS:
-  --model NAME   Model to use (default: opus)
-  --safe         Disable auto mode (omits --permission-mode auto)
-  --rebuild      Force-rebuild the claude-cask:latest image before running
-  -h, --help     Show this help
+  --model NAME      Model to use (default: opus)
+  --auto            Enable auto mode (--permission-mode auto). Off by default;
+                    use this only when you trust the AI to run tool calls
+                    without per-action confirmation.
+  --anthropic-only  Restrict the container's outbound network so only
+                    api.anthropic.com is reachable. Implemented inside the
+                    container with an HTTPS proxy plus iptables OUTPUT rules
+                    (requires --cap-add=NET_ADMIN, granted automatically).
+                    Anything trying to reach a host other than
+                    api.anthropic.com — by Claude or by any tool it runs —
+                    is dropped.
+  --rebuild         Force-rebuild the claude-cask:latest image before running
+  -h, --help        Show this help
 
 The current working directory is mounted at /workspace in the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
@@ -33,13 +44,14 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)   MODEL="$2"; shift 2 ;;
-    --safe)    SAFE_MODE=1; shift ;;
-    --rebuild) REBUILD=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --)        shift; EXTRA_ARGS+=("$@"); break ;;
-    -*)        echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
-    *)         EXTRA_ARGS+=("$1"); shift ;;
+    --model)           MODEL="$2"; shift 2 ;;
+    --auto)            AUTO_MODE=1; shift ;;
+    --anthropic-only)  ANTHROPIC_ONLY=1; shift ;;
+    --rebuild)         REBUILD=1; shift ;;
+    -h|--help)         usage; exit 0 ;;
+    --)                shift; EXTRA_ARGS+=("$@"); break ;;
+    -*)                echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
+    *)                 EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
 
@@ -100,7 +112,14 @@ if [[ -n "$SIGNING_KEY" ]]; then
 fi
 
 CLAUDE_ARGS=(--model "$MODEL")
-[[ $SAFE_MODE -eq 0 ]] && CLAUDE_ARGS+=(--permission-mode auto)
+# Always pass --permission-mode explicitly so the launcher's choice wins
+# over any defaultMode set in the user's host ~/.claude/settings.json
+# (which is mounted into the container and would otherwise take effect).
+if [[ $AUTO_MODE -eq 1 ]]; then
+  CLAUDE_ARGS+=(--permission-mode auto)
+else
+  CLAUDE_ARGS+=(--permission-mode default)
+fi
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   CLAUDE_ARGS+=("${EXTRA_ARGS[@]}")
 fi
@@ -113,6 +132,12 @@ DOCKER_ARGS=(run --rm -it
   -e "GIT_COMMITTER_NAME=$GIT_NAME"
   -e "GIT_COMMITTER_EMAIL=$GIT_EMAIL"
 )
+if [[ $ANTHROPIC_ONLY -eq 1 ]]; then
+  DOCKER_ARGS+=(
+    --cap-add NET_ADMIN
+    -e CLAUDE_CASK_NETWORK_MODE=anthropic-only
+  )
+fi
 
 # Forward terminal-identification env vars so Claude Code's keybindings
 # (e.g., Shift/Ctrl+Enter for newline) match the host terminal. Only
@@ -165,6 +190,44 @@ if [[ ${#GPG_MOUNTS[@]} -gt 0 ]]; then
   DOCKER_ARGS+=("${GPG_MOUNTS[@]}")
 fi
 DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
+
+# --- Pre-flight summary -------------------------------------------------------
+# Print what's about to be mounted/forwarded and (when stdin is a tty) ask
+# for confirmation. Catches "wrong directory" mistakes — the workspace mount
+# is the bound on the AI's filesystem reach, so naming it explicitly is the
+# cheapest possible safety check. Skipped when stdin is not a tty so scripted
+# invocations aren't blocked.
+{
+  echo "claude-cask:"
+  echo "  workspace:    $PWD"
+  echo "  ~/.claude:    $HOME/.claude  (rw)"
+  if [[ -f "$HOME/.claude.json" ]]; then
+    echo "  ~/.claude.json: $HOME/.claude.json  (rw)"
+  fi
+  if [[ -n "$SIGNING_KEY" ]]; then
+    echo "  signing:      $SIGNING_KEY  (via gpg-agent bridge)"
+  else
+    echo "  signing:      disabled (no host user.signingkey)"
+  fi
+  if [[ $ANTHROPIC_ONLY -eq 1 ]]; then
+    echo "  network:      anthropic-only (proxy + iptables, only api.anthropic.com reachable)"
+  else
+    echo "  network:      open (full outbound)"
+  fi
+  if [[ $AUTO_MODE -eq 1 ]]; then
+    echo "  mode:         auto — Claude runs tool calls without confirmation"
+  else
+    echo "  mode:         safe — Claude prompts before each tool call"
+  fi
+} >&2
+
+if [[ -t 0 ]]; then
+  printf "Continue? [Y/n] " >&2
+  read -r reply
+  case "$reply" in
+    n|N|no|No|NO) echo "claude-cask: aborted" >&2; exit 1 ;;
+  esac
+fi
 
 # Don't `exec` — we need the cleanup trap to run after docker exits so we
 # remove the staged ~/.claude/.credentials.json from the host.
