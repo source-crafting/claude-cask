@@ -125,6 +125,10 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     --build-arg "USER_GID=$HOST_GID" \
     --build-arg "IMAGE_HASH=$SRC_HASH" \
     -t "$IMAGE" "$SCRIPT_DIR"
+  # Reclaim the previous claude-cask image, now dangling because the new
+  # build replaced its :latest tag. Scoped to our label so other dangling
+  # images on the host (from unrelated Docker work) are left alone.
+  docker image prune -f --filter "label=claude-cask.uid" >/dev/null 2>&1 || true
 fi
 
 GPG_MOUNTS=()

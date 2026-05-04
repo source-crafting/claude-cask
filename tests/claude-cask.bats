@@ -556,6 +556,49 @@ exit 0"
   grep -qE "docker build .*--build-arg IMAGE_HASH=[0-9a-f]{64}" "$STUB_LOG"
 }
 
+@test "claude-cask prunes dangling claude-cask images after a build" {
+  launcher_default_stubs
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  # The prune happens after the build and is scoped via our label.
+  grep -q "docker image prune -f --filter label=claude-cask.uid" "$STUB_LOG"
+}
+
+@test "claude-cask does not prune when no build happened" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  HH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo $HH ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker image prune" "$STUB_LOG"
+}
+
 @test "claude-cask auto-rebuilds when image source-hash differs from current Dockerfile/entrypoint" {
   launcher_default_stubs
   HU="$(id -u)"
