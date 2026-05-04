@@ -13,7 +13,7 @@ set -euo pipefail
 if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -S /run/host-gpg-agent ]]; then
     install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
-    socat -d \
+    socat \
       "UNIX-LISTEN:/home/claude-cask/.gnupg/S.gpg-agent,fork,reuseaddr,user=claude-cask,group=claude-cask,mode=0600" \
       "UNIX-CONNECT:/run/host-gpg-agent" &
     # Wait briefly for the socket file to appear before dropping privileges.
@@ -34,7 +34,7 @@ if [[ -f "$KEY_PATH" && -n "${CLAUDE_CASK_SIGNING_KEY:-}" ]]; then
   mkdir -p "$HOME/.gnupg"
   chmod 700 "$HOME/.gnupg"
 
-  gpg --batch --import "$KEY_PATH"
+  gpg --quiet --batch --import "$KEY_PATH"
   # Do not rm the key file: it is a bind-mount from the host (Device busy)
   # and only contains the public key. Host temp file is cleaned up by the
   # launcher's EXIT trap.

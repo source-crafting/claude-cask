@@ -58,7 +58,7 @@ exit 0'
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh" --model opus
 
   [ "$status" -eq 0 ]
-  grep -q "^gpg --batch --import" "$STUB_LOG"
+  grep -qE "^gpg( --quiet)? --batch --import" "$STUB_LOG"
   grep -q "^git config --global user.signingkey ABCDEF1234567890$" "$STUB_LOG"
   grep -q "^git config --global commit.gpgsign true$" "$STUB_LOG"
   # The key file must NOT be removed by the entrypoint — under real use it
