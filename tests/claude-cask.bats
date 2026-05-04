@@ -502,6 +502,42 @@ exit 0"
   rm -rf "$LINK_DIR"
 }
 
+@test "claude-cask pre-flight summary shows 'filevault: on' when fdesetup reports on (Darwin)" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Darwin"'
+  stub_set fdesetup '#!/usr/bin/env bash
+echo "FileVault is On."'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"filevault:    on"* ]]
+  [[ "$output" != *"OFF"* ]]
+}
+
+@test "claude-cask pre-flight summary warns when FileVault is off (Darwin)" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Darwin"'
+  stub_set fdesetup '#!/usr/bin/env bash
+echo "FileVault is Off."'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"filevault:    OFF"* ]]
+  [[ "$output" == *"plaintext at rest"* ]]
+}
+
+@test "claude-cask omits filevault line on non-Darwin hosts" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Linux"'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"filevault:"* ]]
+}
+
 @test "claude-cask passes host UID/GID as build args when building" {
   launcher_default_stubs
   # Force a build by making image-inspect "fail" so the launcher reaches

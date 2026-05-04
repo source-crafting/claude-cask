@@ -278,6 +278,17 @@ DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
   else
     echo "  network:      open (full outbound)"
   fi
+  # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
+  # the assumption that makes a persistent credentials file at rest roughly
+  # equivalent to the keychain. If it's off, the user should know.
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v fdesetup >/dev/null 2>&1; then
+    fv_status="$(fdesetup status 2>/dev/null || true)"
+    if [[ "$fv_status" == *"FileVault is On"* ]]; then
+      echo "  filevault:    on"
+    else
+      echo "  filevault:    OFF — host disk is unencrypted; ~/.claude/.credentials.json is plaintext at rest. See SECURITY.md."
+    fi
+  fi
   if [[ $AUTO_MODE -eq 1 ]]; then
     echo "  mode:         auto — Claude runs tool calls without confirmation"
   else

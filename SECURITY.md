@@ -75,7 +75,7 @@ On macOS, Claude Code stores its OAuth token in the Keychain. The Linux Claude i
 
 So the file persists on disk indefinitely once staged. What that exposure actually looks like on a typical macOS dev box:
 
-- **FileVault on (default on modern Macs).** Disk is encrypted at rest. Stolen laptop or stolen disk → the credentials file is unreadable without your login password. Keychain is also protected by your login password, so the file's protection at rest is comparable to the keychain's.
+- **FileVault on (default on modern Macs).** Disk is encrypted at rest. Stolen laptop or stolen disk → the credentials file is unreadable without your login password. Keychain is also protected by your login password, so the file's protection at rest is comparable to the keychain's. *(The launcher's pre-flight summary surfaces FileVault state every run on macOS, with a clear warning when it's off.)*
 - **Time Machine to an encrypted destination.** Backups are encrypted; the file in the backup is no easier to read than on the live disk.
 - **Time Machine to an unencrypted destination, or cloud backup that doesn't pre-encrypt.** The file ends up in plaintext at the backup destination. **This is the realistic residual risk.** Either turn on backup-side encryption, or `sudo tmutil addexclusion ~/.claude` to skip the directory.
 - **Live malware running as you.** Already game over — malware can read the keychain, the credentials file, your SSH keys, browser cookies, etc. The credentials file doesn't materially expand this attack surface.
