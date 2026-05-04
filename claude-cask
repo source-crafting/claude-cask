@@ -72,15 +72,11 @@ fi
 GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
-STAGED_CREDS_FILE=""
 
 # shellcheck disable=SC2329  # invoked via trap
 cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"
-  fi
-  if [[ -n "$STAGED_CREDS_FILE" && -f "$STAGED_CREDS_FILE" ]]; then
-    rm -f "$STAGED_CREDS_FILE"
   fi
   return 0
 }
@@ -167,33 +163,28 @@ if [[ -d "$HOME/.claude/plugins" ]]; then
 fi
 
 # On macOS, Claude Code stores its OAuth token in the Keychain rather than
-# in any file. The Linux Claude Code inside the container reads its token
-# from ~/.claude/.credentials.json. We can't bind-mount the credentials file
-# at /home/claude-cask/.claude/.credentials.json because Docker Desktop's virtiofs cannot
-# stack a file mount inside a directory bind-mount. Instead, write the
-# credentials directly to the host's $HOME/.claude/.credentials.json (which
-# is then visible inside the container via the existing dir mount), and
-# remove it from the host on exit. The keychain still holds the canonical
-# token; this is just a brief on-disk mirror with the same mode (600).
+# in any file. The Linux Claude Code inside the container reads it from
+# ~/.claude/.credentials.json. The launcher writes that file from the
+# keychain only when it doesn't already exist on the host, then leaves it
+# alone for the rest of its life — claude-cask is a *consumer* of the
+# credentials store, not its owner. Deleting on exit would break any other
+# claude session reading the same file (host claude on Linux, another
+# container, even host claude on macOS if it's been written here).
+#
+# The file persists on disk indefinitely. With FileVault on (default on
+# modern Macs) and an encrypted Time Machine destination, this is roughly
+# equivalent in security to the keychain itself. See SECURITY.md.
 if [[ "$(uname -s)" == "Darwin" ]] && command -v security >/dev/null 2>&1; then
-  if creds_json="$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null)" \
-       && [[ -n "$creds_json" ]]; then
-    HOST_CREDS_FILE="$HOME/.claude/.credentials.json"
-    # A zero-byte file is a stale leftover (e.g., a previous failed bind-mount
-    # left an empty mountpoint behind). Remove it so we can stage fresh creds.
-    if [[ -e "$HOST_CREDS_FILE" && ! -s "$HOST_CREDS_FILE" ]]; then
-      rm -f "$HOST_CREDS_FILE"
-    fi
-    if [[ -e "$HOST_CREDS_FILE" ]]; then
-      echo "claude-cask: $HOST_CREDS_FILE already exists on host; not overwriting. The in-container Claude will use it as-is." >&2
-    else
+  HOST_CREDS_FILE="$HOME/.claude/.credentials.json"
+  if [[ ! -e "$HOST_CREDS_FILE" ]]; then
+    if creds_json="$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null)" \
+         && [[ -n "$creds_json" ]]; then
       mkdir -p "$HOME/.claude"
       chmod 700 "$HOME/.claude"
       umask_old="$(umask)"
       umask 077
       printf '%s' "$creds_json" > "$HOST_CREDS_FILE"
       umask "$umask_old"
-      STAGED_CREDS_FILE="$HOST_CREDS_FILE"
     fi
   fi
 fi

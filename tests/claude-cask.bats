@@ -292,7 +292,7 @@ echo "claude called" >> "$STUB_LOG"'
   ! grep -q "^claude called" "$STUB_LOG"
 }
 
-@test "claude-cask stages keychain credentials into ~/.claude/.credentials.json then cleans up" {
+@test "claude-cask stages keychain credentials into ~/.claude/.credentials.json and leaves the file in place" {
   launcher_default_stubs
   mkdir -p "$HOME/.claude"
 
@@ -308,26 +308,20 @@ if [[ \"\$1\" == \"find-generic-password\" ]]; then
 fi
 exit 1"
 
-  # docker stub records that the file existed at run time so we can assert.
-  stub_set docker "#!/usr/bin/env bash
-echo \"docker \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"run\" && -f \"$HOME/.claude/.credentials.json\" ]]; then
-  echo \"creds-present-during-run:\$(cat \"$HOME/.claude/.credentials.json\")\" >> \"\$STUB_LOG\"
-fi
-case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
-exit 0"
-
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
   grep -q "security find-generic-password -s Claude Code-credentials" "$STUB_LOG"
-  grep -q "creds-present-during-run:$CREDS_PAYLOAD" "$STUB_LOG"
-  # File must NOT remain on the host after exit.
-  [ ! -f "$HOME/.claude/.credentials.json" ]
-  # No file-level bind-mount for credentials (avoids the virtiofs stacking bug).
+  # The file is staged and *kept* — the launcher is a consumer of the
+  # credentials store, not its owner; deleting it would break concurrent
+  # sessions on the same host.
+  [ -f "$HOME/.claude/.credentials.json" ]
+  grep -q "$CREDS_PAYLOAD" "$HOME/.claude/.credentials.json"
+  # No separate file-level bind-mount needed (the credentials live inside the
+  # bind-mounted ~/.claude directory).
   ! grep -q "docker run.*-v.*:/home/claude-cask/.claude/.credentials.json" "$STUB_LOG"
 }
 
-@test "claude-cask refuses to overwrite a pre-existing non-empty host ~/.claude/.credentials.json" {
+@test "claude-cask leaves any pre-existing host credentials file alone" {
   launcher_default_stubs
   mkdir -p "$HOME/.claude"
   echo "PRE-EXISTING-CONTENT" > "$HOME/.claude/.credentials.json"
@@ -341,40 +335,10 @@ exit 1'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  # The pre-existing file is preserved untouched.
+  # The pre-existing file is preserved untouched, *and* security was never
+  # called because the file was already there.
   grep -q "PRE-EXISTING-CONTENT" "$HOME/.claude/.credentials.json"
-}
-
-@test "claude-cask overwrites a stale zero-byte ~/.claude/.credentials.json" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude"
-  : > "$HOME/.claude/.credentials.json"   # 0 bytes — stale leftover
-
-  stub_set uname '#!/usr/bin/env bash
-echo "Darwin"'
-
-  CREDS_PAYLOAD='{"claudeAiOauth":{"accessToken":"FAKE"}}'
-  stub_set security "#!/usr/bin/env bash
-echo \"security \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"find-generic-password\" ]]; then
-  echo '$CREDS_PAYLOAD'
-  exit 0
-fi
-exit 1"
-
-  stub_set docker "#!/usr/bin/env bash
-echo \"docker \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"run\" && -s \"$HOME/.claude/.credentials.json\" ]]; then
-  echo \"creds-non-empty-during-run\" >> \"\$STUB_LOG\"
-fi
-case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
-exit 0"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  grep -q "creds-non-empty-during-run" "$STUB_LOG"
-  # Cleaned up after exit (since launcher staged it).
-  [ ! -f "$HOME/.claude/.credentials.json" ]
+  ! grep -q "security find-generic-password" "$STUB_LOG"
 }
 
 @test "claude-cask does not stage credentials when keychain entry is absent" {

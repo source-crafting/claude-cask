@@ -69,6 +69,21 @@ These are claude-cask-specific protections that don't exist when you run Claude 
 - **Single-key GPG.** Only the configured signing key's *public* half is imported into the container's keyring. Private key material never leaves the host. The AI can request signatures (#3 above) but can't see other keys or directly access your keyring.
 - **`--anthropic-only` egress restriction.** Optional kernel-enforced restriction that blocks all outbound network except `api.anthropic.com`. Mitigates exfiltration of anything reachable inside the container — including the OAuth token from #1.
 
+## Credentials on disk (macOS)
+
+On macOS, Claude Code stores its OAuth token in the Keychain. The Linux Claude inside the container reads from `~/.claude/.credentials.json`. The launcher writes that file from your keychain **the first time it doesn't exist**, then leaves it alone forever — claude-cask is a consumer of the credentials store, not its owner. Deleting it on exit would break any other Claude session reading the same file (host claude on Linux, another claude-cask container, even host claude on macOS if it has been pointed at it).
+
+So the file persists on disk indefinitely once staged. What that exposure actually looks like on a typical macOS dev box:
+
+- **FileVault on (default on modern Macs).** Disk is encrypted at rest. Stolen laptop or stolen disk → the credentials file is unreadable without your login password. Keychain is also protected by your login password, so the file's protection at rest is comparable to the keychain's.
+- **Time Machine to an encrypted destination.** Backups are encrypted; the file in the backup is no easier to read than on the live disk.
+- **Time Machine to an unencrypted destination, or cloud backup that doesn't pre-encrypt.** The file ends up in plaintext at the backup destination. **This is the realistic residual risk.** Either turn on backup-side encryption, or `sudo tmutil addexclusion ~/.claude` to skip the directory.
+- **Live malware running as you.** Already game over — malware can read the keychain, the credentials file, your SSH keys, browser cookies, etc. The credentials file doesn't materially expand this attack surface.
+
+If you suspect a leak: revoke the OAuth token from your Anthropic account settings. The blast radius of a compromised token is "API quota burn + recent session history," recoverable in minutes.
+
+If you want to force a refresh from the keychain (e.g., you've re-logged-in on the host): `rm ~/.claude/.credentials.json` and the next claude-cask launch will re-stage from the keychain.
+
 ## Operational guidance
 
 - Read the pre-flight summary before pressing Enter. If the workspace path is wrong, abort.
