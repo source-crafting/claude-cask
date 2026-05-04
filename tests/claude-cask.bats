@@ -405,6 +405,42 @@ echo "Linux"'
   ! grep -q "docker run.*-e COLORTERM=" "$STUB_LOG"
 }
 
+@test "claude-cask defaults to --rm (ephemeral container)" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run --rm" "$STUB_LOG"
+  ! grep -q "docker run.* --cidfile" "$STUB_LOG"
+}
+
+@test "claude-cask --keep-container drops --rm and adds --cidfile" {
+  launcher_default_stubs
+  # docker stub: write a fake container id to whatever path is passed
+  # to --cidfile so the post-run hint logic has something to print.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
+# Find the --cidfile arg and write a fake id there.
+prev=\"\"
+for a in \"\$@\"; do
+  if [[ \"\$prev\" == \"--cidfile\" ]]; then
+    echo fake-cid-1234 > \"\$a\"
+    break
+  fi
+  prev=\"\$a\"
+done
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --keep-container
+  [ "$status" -eq 0 ]
+  ! grep -q "docker run.* --rm" "$STUB_LOG"
+  grep -qE "docker run.* --cidfile /[^ ]+" "$STUB_LOG"
+  [[ "$output" == *"container kept for post-mortem"* ]]
+  [[ "$output" == *"fake-cid-1234"* ]]
+  [[ "$output" == *"docker logs fake-cid-1234"* ]]
+  [[ "$output" == *"docker rm fake-cid-1234"* ]]
+}
+
 @test "claude-cask exits 2 on unknown launcher flag before --" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --not-a-real-flag

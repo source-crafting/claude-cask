@@ -33,6 +33,7 @@ MODEL="opus"
 AUTO_MODE=0
 ANTHROPIC_ONLY=0
 REBUILD=0
+KEEP_CONTAINER=0
 EXTRA_ARGS=()
 
 usage() {
@@ -41,7 +42,7 @@ claude-cask - run Claude Code inside a Docker container
 
 USAGE:
   claude-cask [--model NAME] [--auto] [--anthropic-only] [--rebuild]
-              [-- <args passed to claude>]
+              [--keep-container] [-- <args passed to claude>]
 
 OPTIONS:
   --model NAME      Model to use (default: opus)
@@ -56,6 +57,11 @@ OPTIONS:
                     api.anthropic.com — by Claude or by any tool it runs —
                     is dropped.
   --rebuild         Force-rebuild the claude-cask:latest image before running
+  --keep-container  Don't pass --rm to docker run. The container survives
+                    after exit, so `docker logs <id>` and `docker inspect
+                    <id>` are available for post-mortem debugging. The
+                    launcher prints the container id and cleanup hints at
+                    exit. You're responsible for `docker rm` when done.
   -h, --help        Show this help
 
 The current working directory is mounted at the same path inside the container.
@@ -73,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --auto)            AUTO_MODE=1; shift ;;
     --anthropic-only)  ANTHROPIC_ONLY=1; shift ;;
     --rebuild)         REBUILD=1; shift ;;
+    --keep-container)  KEEP_CONTAINER=1; shift ;;
     -h|--help)         usage; exit 0 ;;
     --)                shift; EXTRA_ARGS+=("$@"); break ;;
     -*)                echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
@@ -185,7 +192,20 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   CLAUDE_ARGS+=("${EXTRA_ARGS[@]}")
 fi
 
-DOCKER_ARGS=(run --rm -it
+# Default: --rm so the container is ephemeral. With --keep-container the
+# container is preserved after exit so docker logs/inspect work for
+# post-mortem; the launcher records the container id via --cidfile and
+# prints cleanup hints on exit.
+CID_FILE=""
+DOCKER_ARGS=(run -it)
+if [[ $KEEP_CONTAINER -eq 0 ]]; then
+  DOCKER_ARGS+=(--rm)
+else
+  CID_FILE="$(mktemp)"
+  rm -f "$CID_FILE"   # docker --cidfile refuses to overwrite an existing file
+  DOCKER_ARGS+=(--cidfile "$CID_FILE")
+fi
+DOCKER_ARGS+=(
   # Mount $PWD at the same path inside the container (rather than at a
   # generic /workspace). Claude Code keys per-project session history off
   # the cwd; mirroring the host path means projectA at /Users/x/A and
@@ -317,7 +337,24 @@ if [[ -t 0 ]]; then
   esac
 fi
 
-# Don't `exec` — we need the cleanup trap to run after docker exits so we
-# remove the staged ~/.claude/.credentials.json from the host.
+# Don't `exec` — we need the cleanup trap (and the post-run hints below)
+# to run after docker exits.
 docker "${DOCKER_ARGS[@]}"
-exit $?
+status=$?
+
+# When --keep-container was set, surface the container id and cleanup
+# hints so the user can inspect logs/state and remove the container when
+# they're done.
+if [[ $KEEP_CONTAINER -eq 1 && -n "$CID_FILE" && -s "$CID_FILE" ]]; then
+  cid="$(cat "$CID_FILE")"
+  rm -f "$CID_FILE"
+  {
+    echo
+    echo "claude-cask: container kept for post-mortem (id: $cid)"
+    echo "  docker logs $cid"
+    echo "  docker inspect $cid"
+    echo "  docker rm $cid     # when you're done"
+  } >&2
+fi
+
+exit $status

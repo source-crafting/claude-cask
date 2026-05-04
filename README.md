@@ -37,6 +37,7 @@ claude-cask --auto                # opt into auto mode (no per-tool prompts)
 claude-cask --model sonnet        # different model
 claude-cask --anthropic-only      # restrict egress: only api.anthropic.com is reachable
 claude-cask --rebuild             # rebuild the image before running
+claude-cask --keep-container      # don't pass --rm; container survives for post-mortem
 claude-cask -- --resume my-task   # forward args to claude
 ```
 
