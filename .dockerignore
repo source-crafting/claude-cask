@@ -1,0 +1,10 @@
+# Allowlist approach: exclude everything from the docker build context, then
+# re-include only what the Dockerfile actually needs. Keeps the context tiny
+# (the Dockerfile only COPYs entrypoint.sh) and prevents unrelated files —
+# .git/, tests/, docs/, README, host-specific cruft — from being shipped to
+# the docker daemon on every build.
+
+*
+
+!Dockerfile
+!entrypoint.sh
