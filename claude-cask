@@ -2,11 +2,37 @@
 set -euo pipefail
 
 IMAGE="claude-cask:latest"
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Resolve the script path through any symlinks before deriving SCRIPT_DIR.
+# README recommends installing via `ln -s` into /usr/local/bin/, so without
+# this the docker-build context (--rebuild and first-run auto-build) would
+# point at the symlink directory and fail. BSD readlink lacks -f, so do it
+# manually for portability across macOS and Linux.
+__cc_resolve_symlink() {
+  local target="$1"
+  local hops=0
+  while [[ -L "$target" ]]; do
+    if (( hops >= 40 )); then
+      echo "claude-cask: too many symlink hops resolving $1 (cycle?)" >&2
+      exit 1
+    fi
+    local link
+    link="$(readlink "$target")"
+    if [[ "$link" = /* ]]; then
+      target="$link"
+    else
+      target="$(dirname "$target")/$link"
+    fi
+    ((hops++))
+  done
+  printf '%s' "$target"
+}
+SCRIPT_DIR="$( cd "$( dirname "$(__cc_resolve_symlink "${BASH_SOURCE[0]}")" )" && pwd )"
 
 MODEL="opus"
-SAFE_MODE=0
+AUTO_MODE=0
 REBUILD=0
+KEEP_CONTAINER=0
 EXTRA_ARGS=()
 
 usage() {
@@ -14,15 +40,23 @@ usage() {
 claude-cask - run Claude Code inside a Docker container
 
 USAGE:
-  claude-cask [--model NAME] [--safe] [--rebuild] [-- <args passed to claude>]
+  claude-cask [--model NAME] [--auto] [--rebuild]
+              [--keep-container] [-- <args passed to claude>]
 
 OPTIONS:
-  --model NAME   Model to use (default: opus)
-  --safe         Disable auto mode (omits --permission-mode auto)
-  --rebuild      Force-rebuild the claude-cask:latest image before running
-  -h, --help     Show this help
+  --model NAME      Model to use (default: opus)
+  --auto            Enable auto mode (--permission-mode auto). Off by default;
+                    use this only when you trust the AI to run tool calls
+                    without per-action confirmation.
+  --rebuild         Force-rebuild the claude-cask:latest image before running
+  --keep-container  Don't pass --rm to docker run. The container survives
+                    after exit, so `docker logs <id>` and `docker inspect
+                    <id>` are available for post-mortem debugging. The
+                    launcher prints the container id and cleanup hints at
+                    exit. You're responsible for `docker rm` when done.
+  -h, --help        Show this help
 
-The current working directory is mounted at /workspace in the container.
+The current working directory is mounted at the same path inside the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
 
 The image is built automatically on first invocation. After editing
@@ -33,16 +67,26 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)   MODEL="$2"; shift 2 ;;
-    --safe)    SAFE_MODE=1; shift ;;
-    --rebuild) REBUILD=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --)       shift; EXTRA_ARGS+=("$@"); break ;;
-    *)        EXTRA_ARGS+=("$1"); shift ;;
+    --model)           MODEL="$2"; shift 2 ;;
+    --auto)            AUTO_MODE=1; shift ;;
+    --rebuild)         REBUILD=1; shift ;;
+    --keep-container)  KEEP_CONTAINER=1; shift ;;
+    -h|--help)         usage; exit 0 ;;
+    --)                shift; EXTRA_ARGS+=("$@"); break ;;
+    -*)                echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
+    *)                 EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
 
 command -v docker >/dev/null 2>&1 || { echo "claude-cask: docker not found in PATH" >&2; exit 1; }
+
+# The container runs as a non-root user whose UID/GID match the host user
+# so bind-mounted files are owned correctly inside the container. We refuse
+# to run as root because (a) creating a UID-0 user inside the container is
+# nonsensical and (b) the threat model assumes a regular user account.
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+[[ "$HOST_UID" -eq 0 ]] && { echo "claude-cask: refusing to run as root (UID 0)" >&2; exit 1; }
 
 GIT_NAME="$(git config --global --get user.name  || true)"
 GIT_EMAIL="$(git config --global --get user.email || true)"
@@ -52,22 +96,47 @@ GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
 
+# Hash the contents of the build context (per .dockerignore: Dockerfile +
+# entrypoint.sh). If the hash recorded in the existing image's label
+# doesn't match what's on disk now, the image is stale and we rebuild.
+SRC_HASH="$(cat "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+
+# Auto-rebuild when the existing image is stale relative to the host:
+# either the user/group don't match (UID drift after switching machines)
+# or the Dockerfile/entrypoint have been edited since the last build.
+if [[ $REBUILD -eq 0 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  image_uid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.uid" }}' "$IMAGE" 2>/dev/null || true)"
+  image_gid="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.gid" }}' "$IMAGE" 2>/dev/null || true)"
+  image_hash="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.image-hash" }}' "$IMAGE" 2>/dev/null || true)"
+  if [[ "$image_uid" != "$HOST_UID" || "$image_gid" != "$HOST_GID" ]]; then
+    echo "claude-cask: image was built for UID/GID ${image_uid:-?}:${image_gid:-?}, host is $HOST_UID:$HOST_GID — rebuilding" >&2
+    REBUILD=1
+  elif [[ "$image_hash" != "$SRC_HASH" ]]; then
+    echo "claude-cask: Dockerfile or entrypoint.sh changed since last build — rebuilding" >&2
+    REBUILD=1
+  fi
+fi
+
 if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  docker build -t "$IMAGE" "$SCRIPT_DIR"
+  docker build \
+    --build-arg "USER_UID=$HOST_UID" \
+    --build-arg "USER_GID=$HOST_GID" \
+    --build-arg "IMAGE_HASH=$SRC_HASH" \
+    -t "$IMAGE" "$SCRIPT_DIR"
+  # Reclaim the previous claude-cask image, now dangling because the new
+  # build replaced its :latest tag. Scoped to our label so other dangling
+  # images on the host (from unrelated Docker work) are left alone.
+  docker image prune -f --filter "label=claude-cask.uid" >/dev/null 2>&1 || true
 fi
 
 GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
-STAGED_CREDS_FILE=""
 
 # shellcheck disable=SC2329  # invoked via trap
 cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"
-  fi
-  if [[ -n "$STAGED_CREDS_FILE" && -f "$STAGED_CREDS_FILE" ]]; then
-    rm -f "$STAGED_CREDS_FILE"
   fi
   return 0
 }
@@ -76,7 +145,11 @@ trap cleanup EXIT
 if [[ -n "$SIGNING_KEY" ]]; then
   TMP_KEY_DIR="$(mktemp -d)"
   KEY_FILE="$TMP_KEY_DIR/signing-key.asc"
-  if ! gpg --export --armor "$SIGNING_KEY" > "$KEY_FILE" || [[ ! -s "$KEY_FILE" ]]; then
+  # The "!" suffix tells gpg to match this key exactly (no fuzzy short-ID
+  # collisions). Without it, a short-ID like "62EEA734" could match more
+  # than one key in the host keyring and we'd export all of them.
+  if ! gpg --export --armor --export-options export-minimal "${SIGNING_KEY}!" > "$KEY_FILE" \
+       || [[ ! -s "$KEY_FILE" ]]; then
     echo "claude-cask: failed to export signing key $SIGNING_KEY" >&2
     exit 1
   fi
@@ -98,13 +171,40 @@ if [[ -n "$SIGNING_KEY" ]]; then
 fi
 
 CLAUDE_ARGS=(--model "$MODEL")
-[[ $SAFE_MODE -eq 0 ]] && CLAUDE_ARGS+=(--permission-mode auto)
+# Always pass --permission-mode explicitly so the launcher's choice wins
+# over any defaultMode set in the user's host ~/.claude/settings.json
+# (which is mounted into the container and would otherwise take effect).
+if [[ $AUTO_MODE -eq 1 ]]; then
+  CLAUDE_ARGS+=(--permission-mode auto)
+else
+  CLAUDE_ARGS+=(--permission-mode default)
+fi
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   CLAUDE_ARGS+=("${EXTRA_ARGS[@]}")
 fi
 
-DOCKER_ARGS=(run --rm -it
-  -v "$PWD:/workspace"
+# Default: --rm so the container is ephemeral. With --keep-container the
+# container is preserved after exit so docker logs/inspect work for
+# post-mortem; the launcher records the container id via --cidfile and
+# prints cleanup hints on exit.
+CID_FILE=""
+DOCKER_ARGS=(run -it)
+if [[ $KEEP_CONTAINER -eq 0 ]]; then
+  DOCKER_ARGS+=(--rm)
+else
+  CID_FILE="$(mktemp)"
+  rm -f "$CID_FILE"   # docker --cidfile refuses to overwrite an existing file
+  DOCKER_ARGS+=(--cidfile "$CID_FILE")
+fi
+DOCKER_ARGS+=(
+  # Mount $PWD at the same path inside the container (rather than at a
+  # generic /workspace). Claude Code keys per-project session history off
+  # the cwd; mirroring the host path means projectA at /Users/x/A and
+  # projectB at /Users/x/B get distinct keys, and they line up with what
+  # host `claude` would record for the same paths.
+  -v "$PWD:$PWD"
+  -w "$PWD"
+  -e "CLAUDE_CASK_WORKDIR=$PWD"
   -v "$HOME/.claude:/home/claude-cask/.claude"
   -e "GIT_AUTHOR_NAME=$GIT_NAME"
   -e "GIT_AUTHOR_EMAIL=$GIT_EMAIL"
@@ -125,33 +225,43 @@ if [[ -f "$HOME/.claude.json" ]]; then
   DOCKER_ARGS+=(-v "$HOME/.claude.json:/home/claude-cask/.claude.json")
 fi
 
+# Lock down the two persistence vectors inside ~/.claude that, if writable
+# from the container, would let an AI plant code that the host's own claude
+# executes on subsequent sessions:
+#   * settings.json — controls enabledPlugins, hooks, permissions, etc.
+#   * plugins/ — installed plugin code; arbitrary JS/TS that runs in claude.
+# Stack a read-only mount over each on top of the parent ~/.claude (rw)
+# mount. Skipped silently when a path doesn't exist on the host.
+if [[ -f "$HOME/.claude/settings.json" ]]; then
+  DOCKER_ARGS+=(-v "$HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro")
+fi
+if [[ -d "$HOME/.claude/plugins" ]]; then
+  DOCKER_ARGS+=(-v "$HOME/.claude/plugins:/home/claude-cask/.claude/plugins:ro")
+fi
+
 # On macOS, Claude Code stores its OAuth token in the Keychain rather than
-# in any file. The Linux Claude Code inside the container reads its token
-# from ~/.claude/.credentials.json. We can't bind-mount the credentials file
-# at /home/claude-cask/.claude/.credentials.json because Docker Desktop's virtiofs cannot
-# stack a file mount inside a directory bind-mount. Instead, write the
-# credentials directly to the host's $HOME/.claude/.credentials.json (which
-# is then visible inside the container via the existing dir mount), and
-# remove it from the host on exit. The keychain still holds the canonical
-# token; this is just a brief on-disk mirror with the same mode (600).
+# in any file. The Linux Claude Code inside the container reads it from
+# ~/.claude/.credentials.json. The launcher writes that file from the
+# keychain only when it doesn't already exist on the host, then leaves it
+# alone for the rest of its life — claude-cask is a *consumer* of the
+# credentials store, not its owner. Deleting on exit would break any other
+# claude session reading the same file (host claude on Linux, another
+# container, even host claude on macOS if it's been written here).
+#
+# The file persists on disk indefinitely. With FileVault on (default on
+# modern Macs) and an encrypted Time Machine destination, this is roughly
+# equivalent in security to the keychain itself. See SECURITY.md.
 if [[ "$(uname -s)" == "Darwin" ]] && command -v security >/dev/null 2>&1; then
-  if creds_json="$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null)" \
-       && [[ -n "$creds_json" ]]; then
-    HOST_CREDS_FILE="$HOME/.claude/.credentials.json"
-    # A zero-byte file is a stale leftover (e.g., a previous failed bind-mount
-    # left an empty mountpoint behind). Remove it so we can stage fresh creds.
-    if [[ -e "$HOST_CREDS_FILE" && ! -s "$HOST_CREDS_FILE" ]]; then
-      rm -f "$HOST_CREDS_FILE"
-    fi
-    if [[ -e "$HOST_CREDS_FILE" ]]; then
-      echo "claude-cask: $HOST_CREDS_FILE already exists on host; not overwriting. The in-container Claude will use it as-is." >&2
-    else
+  HOST_CREDS_FILE="$HOME/.claude/.credentials.json"
+  if [[ ! -e "$HOST_CREDS_FILE" ]]; then
+    if creds_json="$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null)" \
+         && [[ -n "$creds_json" ]]; then
       mkdir -p "$HOME/.claude"
+      chmod 700 "$HOME/.claude"
       umask_old="$(umask)"
       umask 077
       printf '%s' "$creds_json" > "$HOST_CREDS_FILE"
       umask "$umask_old"
-      STAGED_CREDS_FILE="$HOST_CREDS_FILE"
     fi
   fi
 fi
@@ -163,7 +273,69 @@ if [[ ${#GPG_MOUNTS[@]} -gt 0 ]]; then
 fi
 DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
 
-# Don't `exec` — we need the cleanup trap to run after docker exits so we
-# remove the staged ~/.claude/.credentials.json from the host.
+# --- Pre-flight summary -------------------------------------------------------
+# Print what's about to be mounted/forwarded and (when stdin is a tty) ask
+# for confirmation. Catches "wrong directory" mistakes — the workspace mount
+# is the bound on the AI's filesystem reach, so naming it explicitly is the
+# cheapest possible safety check. Skipped when stdin is not a tty so scripted
+# invocations aren't blocked.
+{
+  echo "claude-cask:"
+  echo "  workspace:    $PWD"
+  echo "  ~/.claude:    $HOME/.claude  (rw)"
+  if [[ -f "$HOME/.claude.json" ]]; then
+    echo "  ~/.claude.json: $HOME/.claude.json  (rw)"
+  fi
+  if [[ -n "$SIGNING_KEY" ]]; then
+    echo "  signing:      $SIGNING_KEY  (via gpg-agent bridge)"
+  else
+    echo "  signing:      disabled (no host user.signingkey)"
+  fi
+  echo "  network:      open (full outbound)"
+  # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
+  # the assumption that makes a persistent credentials file at rest roughly
+  # equivalent to the keychain. If it's off, the user should know.
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v fdesetup >/dev/null 2>&1; then
+    fv_status="$(fdesetup status 2>/dev/null || true)"
+    if [[ "$fv_status" == *"FileVault is On"* ]]; then
+      echo "  filevault:    on"
+    else
+      echo "  filevault:    OFF — host disk is unencrypted; ~/.claude/.credentials.json is plaintext at rest. See SECURITY.md."
+    fi
+  fi
+  if [[ $AUTO_MODE -eq 1 ]]; then
+    echo "  mode:         auto — Claude runs tool calls without confirmation"
+  else
+    echo "  mode:         safe — Claude prompts before each tool call"
+  fi
+} >&2
+
+if [[ -t 0 ]]; then
+  printf "Continue? [Y/n] " >&2
+  read -r reply
+  case "$reply" in
+    n|N|no|No|NO) echo "claude-cask: aborted" >&2; exit 1 ;;
+  esac
+fi
+
+# Don't `exec` — we need the cleanup trap (and the post-run hints below)
+# to run after docker exits.
 docker "${DOCKER_ARGS[@]}"
-exit $?
+status=$?
+
+# When --keep-container was set, surface the container id and cleanup
+# hints so the user can inspect logs/state and remove the container when
+# they're done.
+if [[ $KEEP_CONTAINER -eq 1 && -n "$CID_FILE" && -s "$CID_FILE" ]]; then
+  cid="$(cat "$CID_FILE")"
+  rm -f "$CID_FILE"
+  {
+    echo
+    echo "claude-cask: container kept for post-mortem (id: $cid)"
+    echo "  docker logs $cid"
+    echo "  docker inspect $cid"
+    echo "  docker rm $cid     # when you're done"
+  } >&2
+fi
+
+exit $status

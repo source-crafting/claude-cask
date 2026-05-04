@@ -2,25 +2,18 @@
 set -euo pipefail
 
 # When invoked as root inside the container, do privileged one-time setup:
-#   * If the host's gpg-agent socket has been bind-mounted at
-#     /run/host-gpg-agent, stand up a socat bridge that exposes it as a
-#     claude-cask-owned socket at the standard ~claude-cask/.gnupg/S.gpg-agent
-#     path. Docker Desktop's virtiofs presents the bind-mounted socket as
-#     root:root mode 660, so the unprivileged claude-cask user cannot connect
-#     to it directly — the bridge is the workaround.
-# Then re-exec self under claude-cask via gosu and continue with the
-# unprivileged section.
+# chown the bind-mounted host gpg-agent socket so the unprivileged user can
+# connect to it, then symlink it into ~claude-cask/.gnupg/. After that, drop
+# privileges via gosu and re-exec into the unprivileged section below.
 if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -S /run/host-gpg-agent ]]; then
+    # Docker Desktop on macOS presents the bind-mounted host socket as
+    # root:root mode 660 inside the container. chown it to claude-cask so
+    # the unprivileged user can connect, then symlink it to the standard
+    # path in claude-cask's home. No long-running bridge process needed.
     install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
-    socat \
-      "UNIX-LISTEN:/home/claude-cask/.gnupg/S.gpg-agent,fork,reuseaddr,user=claude-cask,group=claude-cask,mode=0600" \
-      "UNIX-CONNECT:/run/host-gpg-agent" &
-    # Wait briefly for the socket file to appear before dropping privileges.
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      [[ -S /home/claude-cask/.gnupg/S.gpg-agent ]] && break
-      sleep 0.1
-    done
+    chown claude-cask:claude-cask /run/host-gpg-agent
+    ln -sfn /run/host-gpg-agent /home/claude-cask/.gnupg/S.gpg-agent
   fi
 
   exec gosu claude-cask "$0" "$@"
@@ -54,7 +47,12 @@ git config --global user.email "$GIT_AUTHOR_EMAIL"
 if [[ -n "${CLAUDE_CASK_SKIP_WORKSPACE_CD:-}" ]]; then
   :
 else
-  cd /workspace
+  # The launcher bind-mounts $PWD at the same in-container path (so per-
+  # project Claude Code sessions key off the host path, not a generic
+  # /workspace). Fall back to /workspace if the env var isn't set, e.g.
+  # when the entrypoint is invoked directly without going through the
+  # launcher (the integration smoke test does this).
+  cd "${CLAUDE_CASK_WORKDIR:-/workspace}"
 fi
 
 exec claude "$@"

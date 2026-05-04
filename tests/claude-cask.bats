@@ -92,36 +92,64 @@ exit 0'
   [ "$status" -eq 0 ]
   [[ "$output" == *"USAGE:"* ]]
   [[ "$output" == *"--model"* ]]
-  [[ "$output" == *"--safe"* ]]
+  [[ "$output" == *"--auto"* ]]
+  [[ "$output" == *"--keep-container"* ]]
 }
 
-@test "claude-cask defaults to --model opus and --permission-mode auto" {
+@test "claude-cask defaults to --permission-mode default (overrides host settings)" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode default" "$STUB_LOG"
+  ! grep -q "docker run.* --permission-mode auto" "$STUB_LOG"
 }
 
-@test "claude-cask --safe omits --permission-mode auto" {
+@test "claude-cask --auto sets --permission-mode auto" {
   launcher_default_stubs
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --safe
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --auto
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus" "$STUB_LOG"
-  ! grep -q "docker run.* --permission-mode" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
+  ! grep -q "docker run.* --permission-mode default" "$STUB_LOG"
 }
 
 @test "claude-cask --model honors override" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --model sonnet
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model sonnet --permission-mode auto" "$STUB_LOG"
+  grep -q "docker run.* --model sonnet" "$STUB_LOG"
 }
 
 @test "claude-cask passes through args after --" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" -- --resume foo
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --permission-mode auto --resume foo" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode default --resume foo" "$STUB_LOG"
+}
+
+@test "claude-cask prints pre-flight summary with workspace and mode" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"workspace:"* ]]
+  [[ "$output" == *"~/.claude:"* ]]
+  [[ "$output" == *"mode:"* ]]
+  [[ "$output" == *"safe"* ]]
+}
+
+@test "claude-cask summary reflects --auto flag" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --auto
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"mode:"* ]]
+  [[ "$output" == *"auto"* ]]
+}
+
+@test "claude-cask skips pre-flight prompt when stdin is not a tty" {
+  launcher_default_stubs
+  # bats run does not allocate a tty, so [[ -t 0 ]] is false → no prompt.
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Continue?"* ]]
 }
 
 @test "claude-cask exits 1 when docker is missing" {
@@ -196,7 +224,7 @@ exit 0"
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "gpg --export --armor ABCDEF1234567890" "$STUB_LOG"
+  grep -q "gpg --export --armor --export-options export-minimal ABCDEF1234567890!" "$STUB_LOG"
   grep -q "gpgconf --list-dirs agent-extra-socket" "$STUB_LOG"
   grep -q "docker run.*-v $AGENT_SOCK:/run/host-gpg-agent" "$STUB_LOG"
   grep -q "docker run.*-e CLAUDE_CASK_SIGNING_KEY=ABCDEF1234567890" "$STUB_LOG"
@@ -240,7 +268,7 @@ echo "claude called" >> "$STUB_LOG"'
   ! grep -q "^claude called" "$STUB_LOG"
 }
 
-@test "claude-cask stages keychain credentials into ~/.claude/.credentials.json then cleans up" {
+@test "claude-cask stages keychain credentials into ~/.claude/.credentials.json and leaves the file in place" {
   launcher_default_stubs
   mkdir -p "$HOME/.claude"
 
@@ -256,26 +284,20 @@ if [[ \"\$1\" == \"find-generic-password\" ]]; then
 fi
 exit 1"
 
-  # docker stub records that the file existed at run time so we can assert.
-  stub_set docker "#!/usr/bin/env bash
-echo \"docker \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"run\" && -f \"$HOME/.claude/.credentials.json\" ]]; then
-  echo \"creds-present-during-run:\$(cat \"$HOME/.claude/.credentials.json\")\" >> \"\$STUB_LOG\"
-fi
-case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
-exit 0"
-
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
   grep -q "security find-generic-password -s Claude Code-credentials" "$STUB_LOG"
-  grep -q "creds-present-during-run:$CREDS_PAYLOAD" "$STUB_LOG"
-  # File must NOT remain on the host after exit.
-  [ ! -f "$HOME/.claude/.credentials.json" ]
-  # No file-level bind-mount for credentials (avoids the virtiofs stacking bug).
+  # The file is staged and *kept* — the launcher is a consumer of the
+  # credentials store, not its owner; deleting it would break concurrent
+  # sessions on the same host.
+  [ -f "$HOME/.claude/.credentials.json" ]
+  grep -q "$CREDS_PAYLOAD" "$HOME/.claude/.credentials.json"
+  # No separate file-level bind-mount needed (the credentials live inside the
+  # bind-mounted ~/.claude directory).
   ! grep -q "docker run.*-v.*:/home/claude-cask/.claude/.credentials.json" "$STUB_LOG"
 }
 
-@test "claude-cask refuses to overwrite a pre-existing non-empty host ~/.claude/.credentials.json" {
+@test "claude-cask leaves any pre-existing host credentials file alone" {
   launcher_default_stubs
   mkdir -p "$HOME/.claude"
   echo "PRE-EXISTING-CONTENT" > "$HOME/.claude/.credentials.json"
@@ -289,40 +311,10 @@ exit 1'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  # The pre-existing file is preserved untouched.
+  # The pre-existing file is preserved untouched, *and* security was never
+  # called because the file was already there.
   grep -q "PRE-EXISTING-CONTENT" "$HOME/.claude/.credentials.json"
-}
-
-@test "claude-cask overwrites a stale zero-byte ~/.claude/.credentials.json" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude"
-  : > "$HOME/.claude/.credentials.json"   # 0 bytes — stale leftover
-
-  stub_set uname '#!/usr/bin/env bash
-echo "Darwin"'
-
-  CREDS_PAYLOAD='{"claudeAiOauth":{"accessToken":"FAKE"}}'
-  stub_set security "#!/usr/bin/env bash
-echo \"security \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"find-generic-password\" ]]; then
-  echo '$CREDS_PAYLOAD'
-  exit 0
-fi
-exit 1"
-
-  stub_set docker "#!/usr/bin/env bash
-echo \"docker \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"run\" && -s \"$HOME/.claude/.credentials.json\" ]]; then
-  echo \"creds-non-empty-during-run\" >> \"\$STUB_LOG\"
-fi
-case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
-exit 0"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  grep -q "creds-non-empty-during-run" "$STUB_LOG"
-  # Cleaned up after exit (since launcher staged it).
-  [ ! -f "$HOME/.claude/.credentials.json" ]
+  ! grep -q "security find-generic-password" "$STUB_LOG"
 }
 
 @test "claude-cask does not stage credentials when keychain entry is absent" {
@@ -389,11 +381,328 @@ echo "Linux"'
   ! grep -q "docker run.*-e COLORTERM=" "$STUB_LOG"
 }
 
+@test "claude-cask defaults to --rm (ephemeral container)" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run --rm" "$STUB_LOG"
+  ! grep -q "docker run.* --cidfile" "$STUB_LOG"
+}
+
+@test "claude-cask --keep-container drops --rm and adds --cidfile" {
+  launcher_default_stubs
+  # docker stub: write a fake container id to whatever path is passed
+  # to --cidfile so the post-run hint logic has something to print.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in image) [[ \"\$2\" == \"inspect\" ]] && exit 0 ;; esac
+# Find the --cidfile arg and write a fake id there.
+prev=\"\"
+for a in \"\$@\"; do
+  if [[ \"\$prev\" == \"--cidfile\" ]]; then
+    echo fake-cid-1234 > \"\$a\"
+    break
+  fi
+  prev=\"\$a\"
+done
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --keep-container
+  [ "$status" -eq 0 ]
+  ! grep -q "docker run.* --rm" "$STUB_LOG"
+  grep -qE "docker run.* --cidfile /[^ ]+" "$STUB_LOG"
+  [[ "$output" == *"container kept for post-mortem"* ]]
+  [[ "$output" == *"fake-cid-1234"* ]]
+  [[ "$output" == *"docker logs fake-cid-1234"* ]]
+  [[ "$output" == *"docker rm fake-cid-1234"* ]]
+}
+
+@test "claude-cask exits 2 on unknown launcher flag before --" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --not-a-real-flag
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown flag '--not-a-real-flag'"* ]]
+}
+
+@test "claude-cask still allows unknown flags after --" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" -- --not-a-real-flag value
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*--not-a-real-flag value" "$STUB_LOG"
+}
+
+@test "claude-cask mounts ~/.claude/settings.json read-only when present" {
+  launcher_default_stubs
+  mkdir -p "$HOME/.claude"
+  echo "{}" > "$HOME/.claude/settings.json"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*-v $HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro" "$STUB_LOG"
+}
+
+@test "claude-cask mounts ~/.claude/plugins read-only when present" {
+  launcher_default_stubs
+  mkdir -p "$HOME/.claude/plugins"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.*-v $HOME/.claude/plugins:/home/claude-cask/.claude/plugins:ro" "$STUB_LOG"
+}
+
+@test "claude-cask omits settings.json/plugins RO mounts when absent" {
+  launcher_default_stubs
+  # HOME is fresh tmp; neither path exists.
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "settings.json:.*:ro" "$STUB_LOG"
+  ! grep -q "plugins:.*:ro" "$STUB_LOG"
+}
+
+@test "claude-cask mirrors PWD at the same in-container path (no /workspace collision)" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  # Mount source and target are both $PWD.
+  grep -q "docker run.*-v $PWD:$PWD" "$STUB_LOG"
+  # Working directory inside the container is also $PWD.
+  grep -q "docker run.*-w $PWD" "$STUB_LOG"
+  # And the entrypoint gets the path via env var.
+  grep -q "docker run.*-e CLAUDE_CASK_WORKDIR=$PWD" "$STUB_LOG"
+  # The old /workspace wiring is gone.
+  ! grep -q "docker run.*:/workspace" "$STUB_LOG"
+}
+
+@test "claude-cask aborts cleanly on a circular launcher symlink" {
+  launcher_default_stubs
+
+  # Build A → B → A. Invoking through either should error within the hop
+  # limit rather than infinite-looping.
+  LINK_DIR="$(mktemp -d)"
+  ln -s "$LINK_DIR/B" "$LINK_DIR/A"
+  ln -s "$LINK_DIR/A" "$LINK_DIR/B"
+
+  PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"too many symlink hops"* ]]
+
+  rm -rf "$LINK_DIR"
+}
+
+@test "claude-cask resolves symlinked launcher path for docker build context" {
+  launcher_default_stubs
+
+  # Make image-inspect "fail" so the launcher reaches the build path.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  # Place a symlink to the real launcher into a different directory.
+  LINK_DIR="$(mktemp -d)"
+  ln -s "$REPO_ROOT/claude-cask" "$LINK_DIR/claude-cask"
+
+  # Invoke through the symlink. Without symlink resolution, SCRIPT_DIR would
+  # be $LINK_DIR and the docker build context would be wrong.
+  PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker build .*-t claude-cask:latest $REPO_ROOT" "$STUB_LOG"
+  ! grep -q "docker build .*-t claude-cask:latest $LINK_DIR" "$STUB_LOG"
+
+  rm -rf "$LINK_DIR"
+}
+
+@test "claude-cask pre-flight summary shows 'filevault: on' when fdesetup reports on (Darwin)" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Darwin"'
+  stub_set fdesetup '#!/usr/bin/env bash
+echo "FileVault is On."'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"filevault:    on"* ]]
+  [[ "$output" != *"OFF"* ]]
+}
+
+@test "claude-cask pre-flight summary warns when FileVault is off (Darwin)" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Darwin"'
+  stub_set fdesetup '#!/usr/bin/env bash
+echo "FileVault is Off."'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"filevault:    OFF"* ]]
+  [[ "$output" == *"plaintext at rest"* ]]
+}
+
+@test "claude-cask omits filevault line on non-Darwin hosts" {
+  launcher_default_stubs
+  stub_set uname '#!/usr/bin/env bash
+echo "Linux"'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"filevault:"* ]]
+}
+
+@test "claude-cask passes host UID/GID and source hash as build args when building" {
+  launcher_default_stubs
+  # Force a build by making image-inspect "fail" so the launcher reaches
+  # the build path.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -qE "docker build .*--build-arg USER_UID=$(id -u)" "$STUB_LOG"
+  grep -qE "docker build .*--build-arg USER_GID=$(id -g)" "$STUB_LOG"
+  grep -qE "docker build .*--build-arg IMAGE_HASH=[0-9a-f]{64}" "$STUB_LOG"
+}
+
+@test "claude-cask prunes dangling claude-cask images after a build" {
+  launcher_default_stubs
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image) [[ \"\$2\" == \"inspect\" ]] && exit 1 ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  # The prune happens after the build and is scoped via our label.
+  grep -q "docker image prune -f --filter label=claude-cask.uid" "$STUB_LOG"
+}
+
+@test "claude-cask does not prune when no build happened" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  HH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo $HH ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker image prune" "$STUB_LOG"
+}
+
+@test "claude-cask auto-rebuilds when image source-hash differs from current Dockerfile/entrypoint" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  # docker stub: image exists, UID/GID labels match host, but image-hash
+  # label is a stale value that doesn't match the current source.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dockerfile or entrypoint.sh changed since last build"* ]]
+  grep -q "docker build " "$STUB_LOG"
+}
+
+@test "claude-cask auto-rebuilds when image label UID/GID differ from host" {
+  launcher_default_stubs
+  # docker stub: image-inspect returns the image, with a "wrong" label that
+  # doesn't match the host UID/GID. The launcher should detect this and
+  # trigger a rebuild.
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      # Mimic both inspect calls: the existence check and the label fetch.
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo 999 ;;
+          *claude-cask.gid*) echo 999 ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"image was built for UID/GID 999:999"* ]]
+  grep -q "docker build " "$STUB_LOG"
+}
+
+@test "claude-cask skips rebuild when all labels match (UID/GID + image-hash)" {
+  launcher_default_stubs
+  HU="$(id -u)"
+  HG="$(id -g)"
+  HH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  stub_set docker "#!/usr/bin/env bash
+echo \"docker \$@\" >> \"\$STUB_LOG\"
+case \"\$1\" in
+  image)
+    if [[ \"\$2\" == \"inspect\" ]]; then
+      if [[ \"\$3\" == \"--format\" ]]; then
+        case \"\$4\" in
+          *claude-cask.uid*) echo $HU ;;
+          *claude-cask.gid*) echo $HG ;;
+          *claude-cask.image-hash*) echo $HH ;;
+        esac
+      fi
+      exit 0
+    fi
+    ;;
+esac
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  ! grep -q "docker build" "$STUB_LOG"
+}
+
 @test "claude-cask --rebuild forces a rebuild even when image exists" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
   [ "$status" -eq 0 ]
-  grep -q "docker build -t claude-cask:latest" "$STUB_LOG"
+  grep -q "docker build .*-t claude-cask:latest" "$STUB_LOG"
 }
 
 @test "claude-cask exits 1 when gpg export is empty" {
