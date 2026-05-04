@@ -8,7 +8,9 @@ if [[ -f "$KEY_PATH" && -n "${CLAUDE_CASK_SIGNING_KEY:-}" ]]; then
   chmod 700 "$HOME/.gnupg"
 
   gpg --batch --import "$KEY_PATH"
-  rm -f "$KEY_PATH"
+  # Do not rm the key file: it is a bind-mount from the host (Device busy)
+  # and only contains the public key. Host temp file is cleaned up by the
+  # launcher's EXIT trap.
 
   git config --global user.signingkey "$CLAUDE_CASK_SIGNING_KEY"
   git config --global gpg.program gpg

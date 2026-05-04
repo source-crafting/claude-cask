@@ -61,7 +61,9 @@ exit 0'
   grep -q "^gpg --batch --import" "$STUB_LOG"
   grep -q "^git config --global user.signingkey ABCDEF1234567890$" "$STUB_LOG"
   grep -q "^git config --global commit.gpgsign true$" "$STUB_LOG"
-  [ ! -f "$TMPDIR_FOR_KEY/signing-key.asc" ]
+  # The key file must NOT be removed by the entrypoint — under real use it
+  # is a read-only bind-mount and `rm` fails with "Device or resource busy".
+  [ -f "$TMPDIR_FOR_KEY/signing-key.asc" ]
 }
 
 # Helper: minimal stubs for docker, git so claude-cask can run.
@@ -93,33 +95,33 @@ exit 0'
   [[ "$output" == *"--safe"* ]]
 }
 
-@test "claude-cask defaults to --model opus and --auto" {
+@test "claude-cask defaults to --model opus and --permission-mode auto" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --auto" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
 }
 
-@test "claude-cask --safe omits --auto" {
+@test "claude-cask --safe omits --permission-mode auto" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --safe
   [ "$status" -eq 0 ]
   grep -q "docker run.* --model opus" "$STUB_LOG"
-  ! grep -q "docker run.* --auto" "$STUB_LOG"
+  ! grep -q "docker run.* --permission-mode" "$STUB_LOG"
 }
 
 @test "claude-cask --model honors override" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --model sonnet
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model sonnet --auto" "$STUB_LOG"
+  grep -q "docker run.* --model sonnet --permission-mode auto" "$STUB_LOG"
 }
 
 @test "claude-cask passes through args after --" {
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" -- --resume foo
   [ "$status" -eq 0 ]
-  grep -q "docker run.* --model opus --auto --resume foo" "$STUB_LOG"
+  grep -q "docker run.* --model opus --permission-mode auto --resume foo" "$STUB_LOG"
 }
 
 @test "claude-cask exits 1 when docker is missing" {
@@ -236,6 +238,13 @@ echo "claude called" >> "$STUB_LOG"'
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh"
   [ "$status" -ne 0 ]
   ! grep -q "^claude called" "$STUB_LOG"
+}
+
+@test "claude-cask --rebuild forces a rebuild even when image exists" {
+  launcher_default_stubs
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
+  [ "$status" -eq 0 ]
+  grep -q "docker build -t claude-cask:latest" "$STUB_LOG"
 }
 
 @test "claude-cask exits 1 when gpg export is empty" {

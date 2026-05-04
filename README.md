@@ -15,14 +15,27 @@ git clone <this-repo> ~/claude-cask
 ln -s ~/claude-cask/claude-cask /usr/local/bin/claude-cask
 ```
 
-The image builds automatically on first invocation.
+## Building the image
+
+The image is tagged `claude-cask:latest`. The launcher builds it automatically on first invocation. To build (or rebuild) explicitly:
+
+```bash
+# From the cloned repo:
+docker build -t claude-cask:latest .
+
+# Or via the launcher:
+claude-cask --rebuild
+```
+
+After editing `Dockerfile` or `entrypoint.sh`, you must rebuild — the launcher does **not** detect changes on its own (it only auto-builds when the image is missing).
 
 ## Usage
 
 ```bash
 claude-cask                       # Opus + auto mode
 claude-cask --model sonnet        # different model
-claude-cask --safe                # default permission prompts (no --auto)
+claude-cask --safe                # default permission prompts (omits --permission-mode auto)
+claude-cask --rebuild             # rebuild the image before running
 claude-cask -- --resume my-task   # forward args to claude
 ```
 
@@ -33,7 +46,7 @@ claude-cask -- --resume my-task   # forward args to claude
 | `$PWD` | `/workspace` | Your project. Working directory inside the container. |
 | `~/.claude` | `/root/.claude` | Claude Code config, sessions, plugins. Read-write. |
 | `gpg-agent` extra socket | `/root/.gnupg/S.gpg-agent` | Signing happens on host; container has no private key access. |
-| Single armored public key | `/tmp/signing-key.asc` (read-only, deleted after import) | Only the configured signing key. |
+| Single armored public key | `/tmp/signing-key.asc` (read-only) | Only the configured signing key. |
 
 ## GPG security model
 

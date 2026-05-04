@@ -6,6 +6,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 MODEL="opus"
 SAFE_MODE=0
+REBUILD=0
 EXTRA_ARGS=()
 
 usage() {
@@ -13,22 +14,28 @@ usage() {
 claude-cask - run Claude Code inside a Docker container
 
 USAGE:
-  claude-cask [--model NAME] [--safe] [-- <args passed to claude>]
+  claude-cask [--model NAME] [--safe] [--rebuild] [-- <args passed to claude>]
 
 OPTIONS:
   --model NAME   Model to use (default: opus)
-  --safe         Disable auto mode (default Claude Code permission prompts)
+  --safe         Disable auto mode (omits --permission-mode auto)
+  --rebuild      Force-rebuild the claude-cask:latest image before running
   -h, --help     Show this help
 
 The current working directory is mounted at /workspace in the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
+
+The image is built automatically on first invocation. After editing
+Dockerfile or entrypoint.sh, pass --rebuild (or run
+"docker build -t claude-cask:latest <repo-dir>") to refresh it.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)  MODEL="$2"; shift 2 ;;
-    --safe)   SAFE_MODE=1; shift ;;
+    --model)   MODEL="$2"; shift 2 ;;
+    --safe)    SAFE_MODE=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --)       shift; EXTRA_ARGS+=("$@"); break ;;
     *)        EXTRA_ARGS+=("$1"); shift ;;
@@ -45,7 +52,7 @@ GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -t "$IMAGE" "$SCRIPT_DIR"
 fi
 
@@ -87,7 +94,7 @@ if [[ -n "$SIGNING_KEY" ]]; then
 fi
 
 CLAUDE_ARGS=(--model "$MODEL")
-[[ $SAFE_MODE -eq 0 ]] && CLAUDE_ARGS+=(--auto)
+[[ $SAFE_MODE -eq 0 ]] && CLAUDE_ARGS+=(--permission-mode auto)
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   CLAUDE_ARGS+=("${EXTRA_ARGS[@]}")
 fi
