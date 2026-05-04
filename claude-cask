@@ -31,7 +31,6 @@ SCRIPT_DIR="$( cd "$( dirname "$(__cc_resolve_symlink "${BASH_SOURCE[0]}")" )" &
 
 MODEL="opus"
 AUTO_MODE=0
-ANTHROPIC_ONLY=0
 REBUILD=0
 KEEP_CONTAINER=0
 EXTRA_ARGS=()
@@ -41,7 +40,7 @@ usage() {
 claude-cask - run Claude Code inside a Docker container
 
 USAGE:
-  claude-cask [--model NAME] [--auto] [--anthropic-only] [--rebuild]
+  claude-cask [--model NAME] [--auto] [--rebuild]
               [--keep-container] [-- <args passed to claude>]
 
 OPTIONS:
@@ -49,13 +48,6 @@ OPTIONS:
   --auto            Enable auto mode (--permission-mode auto). Off by default;
                     use this only when you trust the AI to run tool calls
                     without per-action confirmation.
-  --anthropic-only  Restrict the container's outbound network so only
-                    api.anthropic.com is reachable. Implemented inside the
-                    container with an HTTPS proxy plus iptables OUTPUT rules
-                    (requires --cap-add=NET_ADMIN, granted automatically).
-                    Anything trying to reach a host other than
-                    api.anthropic.com — by Claude or by any tool it runs —
-                    is dropped.
   --rebuild         Force-rebuild the claude-cask:latest image before running
   --keep-container  Don't pass --rm to docker run. The container survives
                     after exit, so `docker logs <id>` and `docker inspect
@@ -77,7 +69,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)           MODEL="$2"; shift 2 ;;
     --auto)            AUTO_MODE=1; shift ;;
-    --anthropic-only)  ANTHROPIC_ONLY=1; shift ;;
     --rebuild)         REBUILD=1; shift ;;
     --keep-container)  KEEP_CONTAINER=1; shift ;;
     -h|--help)         usage; exit 0 ;;
@@ -220,12 +211,6 @@ DOCKER_ARGS+=(
   -e "GIT_COMMITTER_NAME=$GIT_NAME"
   -e "GIT_COMMITTER_EMAIL=$GIT_EMAIL"
 )
-if [[ $ANTHROPIC_ONLY -eq 1 ]]; then
-  DOCKER_ARGS+=(
-    --cap-add NET_ADMIN
-    -e CLAUDE_CASK_NETWORK_MODE=anthropic-only
-  )
-fi
 
 # Forward terminal-identification env vars so Claude Code's keybindings
 # (e.g., Shift/Ctrl+Enter for newline) match the host terminal. Only
@@ -306,11 +291,7 @@ DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
   else
     echo "  signing:      disabled (no host user.signingkey)"
   fi
-  if [[ $ANTHROPIC_ONLY -eq 1 ]]; then
-    echo "  network:      anthropic-only (proxy + iptables, only api.anthropic.com reachable)"
-  else
-    echo "  network:      open (full outbound)"
-  fi
+  echo "  network:      open (full outbound)"
   # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
   # the assumption that makes a persistent credentials file at rest roughly
   # equivalent to the keychain. If it's off, the user should know.

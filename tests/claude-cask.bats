@@ -93,7 +93,7 @@ exit 0'
   [[ "$output" == *"USAGE:"* ]]
   [[ "$output" == *"--model"* ]]
   [[ "$output" == *"--auto"* ]]
-  [[ "$output" == *"--anthropic-only"* ]]
+  [[ "$output" == *"--keep-container"* ]]
 }
 
 @test "claude-cask defaults to --permission-mode default (overrides host settings)" {
@@ -110,22 +110,6 @@ exit 0'
   [ "$status" -eq 0 ]
   grep -q "docker run.* --model opus --permission-mode auto" "$STUB_LOG"
   ! grep -q "docker run.* --permission-mode default" "$STUB_LOG"
-}
-
-@test "claude-cask --anthropic-only adds NET_ADMIN cap and network env" {
-  launcher_default_stubs
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --anthropic-only
-  [ "$status" -eq 0 ]
-  grep -q "docker run.* --cap-add NET_ADMIN" "$STUB_LOG"
-  grep -q "docker run.* -e CLAUDE_CASK_NETWORK_MODE=anthropic-only" "$STUB_LOG"
-}
-
-@test "claude-cask without --anthropic-only does not add NET_ADMIN" {
-  launcher_default_stubs
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  ! grep -q "docker run.* --cap-add" "$STUB_LOG"
-  ! grep -q "CLAUDE_CASK_NETWORK_MODE" "$STUB_LOG"
 }
 
 @test "claude-cask --model honors override" {
@@ -158,14 +142,6 @@ exit 0'
   [ "$status" -eq 0 ]
   [[ "$output" == *"mode:"* ]]
   [[ "$output" == *"auto"* ]]
-}
-
-@test "claude-cask summary reflects --anthropic-only flag" {
-  launcher_default_stubs
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --anthropic-only
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"network:"* ]]
-  [[ "$output" == *"anthropic-only"* ]]
 }
 
 @test "claude-cask skips pre-flight prompt when stdin is not a tty" {

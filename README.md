@@ -35,7 +35,6 @@ After editing `Dockerfile` or `entrypoint.sh`, you must rebuild — the launcher
 claude-cask                       # Opus + safe mode (per-tool prompts apply)
 claude-cask --auto                # opt into auto mode (no per-tool prompts)
 claude-cask --model sonnet        # different model
-claude-cask --anthropic-only      # restrict egress: only api.anthropic.com is reachable
 claude-cask --rebuild             # rebuild the image before running
 claude-cask --keep-container      # don't pass --rm; container survives for post-mortem
 claude-cask -- --resume my-task   # forward args to claude
@@ -44,14 +43,6 @@ claude-cask -- --resume my-task   # forward args to claude
 **Safe by default.** Without `--auto`, the in-container Claude prompts before each tool call (the standard Claude Code behavior). Pass `--auto` only when you trust the AI to act in this workspace without per-action confirmation. See *Security* below for what changes when you do.
 
 **Pre-flight summary.** Each launch prints a summary of mounts, signing key, network, and mode, and (when stdin is a tty) asks for confirmation. The point is to catch "I'm in the wrong directory" mistakes before the container takes hold of the workspace.
-
-**Restricted egress (`--anthropic-only`).** Only `api.anthropic.com` is reachable from inside the container. Everything else — `example.com`, `pastebin.com`, raw TCP to arbitrary IPs, the works — is dropped at the kernel level by iptables, so even tools that ignore `HTTPS_PROXY` (or that try raw sockets) can't get out.
-
-Implementation: a small in-container HTTPS proxy ([tinyproxy](https://tinyproxy.github.io/)) is configured with a one-line allowlist (`^api\.anthropic\.com$`). iptables drops all OUTPUT except (a) loopback, (b) DNS, (c) established connections, and (d) traffic from the proxy's UID. The unprivileged `claude-cask` user has no other path out — its only way to reach the network is `HTTPS_PROXY=http://127.0.0.1:8888`, which only forwards to Anthropic.
-
-This requires `--cap-add=NET_ADMIN` (granted automatically by the launcher when this flag is set; not granted otherwise).
-
-Claude Code itself works normally — its API calls go through the proxy. Anything else the AI tries to reach is blocked.
 
 ## What gets mounted
 
@@ -116,7 +107,7 @@ claude-cask sandboxes Claude Code so it can work on the project in `$PWD` withou
 Quick summary:
 - Default (no flags) is safe mode — Claude prompts for each tool call.
 - `--auto` skips per-tool prompts; the AI runs inside the container's bounds without confirmation.
-- `--anthropic-only` restricts outbound network to `api.anthropic.com` (kernel-enforced via iptables + a tinyproxy allowlist). Pair this with `--auto` for the cleanest mitigation against accidental exfiltration.
+- The container has full outbound network access by default, same as native Claude Code. If you need stricter egress, use Docker's own `--network` controls or run on a host-side firewalled network.
 
 ## Tests
 

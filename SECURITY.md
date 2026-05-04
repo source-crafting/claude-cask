@@ -23,7 +23,7 @@ The container is `--rm`, so the runtime state is ephemeral — cleared when you 
 
 ## What the sandbox does **not** bound
 
-claude-cask is a sandbox, not a moat. There are properties of running Claude Code with `--permission-mode auto` that the sandbox can't change. The findings below were originally listed as HIGH-severity in an internal review; on closer look, they are mostly inherited from running Claude with auto-mode at all and are not new risks introduced by the container. They are documented here so you can make informed decisions about when to enable auto mode and when to use `--anthropic-only`.
+claude-cask is a sandbox, not a moat. There are properties of running Claude Code with `--permission-mode auto` that the sandbox can't change. The findings below were originally listed as HIGH-severity in an internal review; on closer look, they are mostly inherited from running Claude with auto-mode at all and are not new risks introduced by the container. They are documented here so you can make informed decisions about when to enable auto mode.
 
 ### 1. OAuth token reachable inside the container in auto mode
 
@@ -33,7 +33,7 @@ When Claude is running with `--permission-mode auto` (opt-in via `--auto`), any 
 
 **Mitigations available:**
 - Don't pass `--auto` (the default). Per-tool prompts apply, and a malicious-or-confused tool call asking for `Read("~/.claude/.credentials.json")` is something you'd see and could deny.
-- Pass `--anthropic-only`. Even if the AI reads the token, it can't exfiltrate it: outbound network is restricted to `api.anthropic.com` at the kernel level (iptables + a tinyproxy allowlist).
+- If exfiltration risk is unacceptable for a given session, run claude-cask on a network-restricted host (or with Docker's own `--network` controls layered on top via `docker run --network`).
 
 ### 2. Auto-mode skips per-tool-call confirmations
 
@@ -67,7 +67,6 @@ These are claude-cask-specific protections that don't exist when you run Claude 
 - **Non-root user, matching host UID.** The container runs as `claude-cask`, not root. The user's UID/GID are baked into the image at build time from the host's `id -u`/`id -g`, so bind-mounted files are owned by the same UID inside the container as on the host (important on native Linux). The launcher detects an image/host UID mismatch via image labels and auto-rebuilds. There is no long-running root process inside the container after the entrypoint completes its setup.
 - **Persistence vectors locked down.** `~/.claude/settings.json` and `~/.claude/plugins/` are mounted **read-only** inside the container. The AI cannot plant code that the host's own Claude would execute on subsequent sessions (no editing `enabledPlugins`/`hooks`/`permissions`, no dropping plugin files). The kernel enforces this — writes return `EROFS`.
 - **Single-key GPG.** Only the configured signing key's *public* half is imported into the container's keyring. Private key material never leaves the host. The AI can request signatures (#3 above) but can't see other keys or directly access your keyring.
-- **`--anthropic-only` egress restriction.** Optional kernel-enforced restriction that blocks all outbound network except `api.anthropic.com`. Mitigates exfiltration of anything reachable inside the container — including the OAuth token from #1.
 
 ## Credentials on disk (macOS)
 
@@ -88,7 +87,6 @@ If you want to force a refresh from the keychain (e.g., you've re-logged-in on t
 
 - Read the pre-flight summary before pressing Enter. If the workspace path is wrong, abort.
 - Default to safe mode. Pass `--auto` only when you've decided you trust this session to act without confirmation.
-- Pair `--auto` with `--anthropic-only` whenever the workspace contains data you'd want to keep out of arbitrary third-party hands.
 - If you use signed commits, configure `gpg-agent` cache TTL deliberately. A long cache plus auto-mode is a "Claude can sign anything for the next ten minutes" setup.
 
 ## Open issues and future work

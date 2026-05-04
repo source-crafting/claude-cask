@@ -8,8 +8,6 @@ RUN apt-get update \
       curl \
       openssh-client \
       gosu \
-      tinyproxy \
-      iptables \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
