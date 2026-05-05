@@ -186,6 +186,73 @@ manifests_all_empty() {
   return 0
 }
 
+render_user_dockerfile() {
+  local apt_pkgs npm_pkgs pip_pkgs cargo_pkgs
+  apt_pkgs="$(manifest_read apt | tr '\n' ' ')"
+  npm_pkgs="$(manifest_read npm | tr '\n' ' ')"
+  pip_pkgs="$(manifest_read pip | tr '\n' ' ')"
+  cargo_pkgs="$(manifest_read cargo | tr '\n' ' ')"
+
+  echo "FROM claude-cask:latest"
+  echo "USER root"
+
+  # Compose the apt RUN: user-listed apt packages, plus pipx if pip is
+  # non-empty, plus the cargo toolchain + build deps if cargo is non-empty.
+  local apt_line="$apt_pkgs"
+  if [[ -n "$pip_pkgs" ]]; then
+    apt_line+=" pipx"
+  fi
+  if [[ -n "$cargo_pkgs" ]]; then
+    apt_line+=" cargo build-essential pkg-config libssl-dev"
+  fi
+  apt_line="$(echo "$apt_line" | xargs || true)"  # collapse whitespace
+  if [[ -n "$apt_line" ]]; then
+    echo "RUN apt-get update && apt-get install -y --no-install-recommends $apt_line && rm -rf /var/lib/apt/lists/*"
+  fi
+
+  if [[ -n "$npm_pkgs" ]]; then
+    echo "RUN npm install -g $(echo "$npm_pkgs" | xargs)"
+  fi
+
+  if [[ -n "$pip_pkgs" ]]; then
+    # pipx --global requires pipx >= 1.4. Debian-stable's pipx may be older;
+    # in that case the binaries land in /root/.local/bin and we symlink them
+    # into /usr/local/bin so the runtime user finds them on PATH.
+    local p
+    for p in $pip_pkgs; do
+      echo "RUN pipx install --global \"$p\" 2>/dev/null || (pipx install \"$p\" && ln -sf /root/.local/bin/* /usr/local/bin/)"
+    done
+  fi
+
+  if [[ -n "$cargo_pkgs" ]]; then
+    local c
+    for c in $cargo_pkgs; do
+      echo "RUN cargo install --root /usr/local \"$c\""
+    done
+  fi
+
+  echo "USER claude-cask"
+  echo "LABEL claude-cask.user-hash=\"$(user_hash)\""
+}
+
+# Hash inputs that determine staleness of :user: the four manifests
+# plus the base image's content ID. If any drifts, :user is rebuilt.
+user_hash() {
+  local base_id
+  base_id="$(docker image inspect --format '{{.Id}}' claude-cask:latest 2>/dev/null || echo none)"
+  {
+    manifest_read apt
+    echo "---"
+    manifest_read npm
+    echo "---"
+    manifest_read pip
+    echo "---"
+    manifest_read cargo
+    echo "---"
+    echo "$base_id"
+  } | shasum -a 256 | cut -d' ' -f1
+}
+
 if [[ "${CLAUDE_CASK_SOURCE_ONLY:-0}" == "1" ]]; then
   return 0 2>/dev/null || exit 0
 fi

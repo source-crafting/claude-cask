@@ -81,3 +81,45 @@ load_launcher_funcs() {
   grep -q "removed: ripgrep" /tmp/out
   grep -q "not_present: nonexistent" /tmp/out
 }
+
+@test "render_user_dockerfile emits FROM and apt RUN when apt manifest non-empty" {
+  load_launcher_funcs
+  manifest_add apt ripgrep jq > /dev/null
+  out="$(render_user_dockerfile)"
+  echo "$out" | grep -q "^FROM claude-cask:latest$"
+  echo "$out" | grep -q "apt-get install -y --no-install-recommends"
+  echo "$out" | grep -q " ripgrep "
+  echo "$out" | grep -q " jq"
+  ! echo "$out" | grep -q "npm install"
+  ! echo "$out" | grep -q "pipx install"
+  ! echo "$out" | grep -q "cargo install"
+}
+
+@test "render_user_dockerfile pulls in pipx when pip manifest non-empty" {
+  load_launcher_funcs
+  manifest_add pip httpie > /dev/null
+  out="$(render_user_dockerfile)"
+  echo "$out" | grep -q "apt-get install -y --no-install-recommends.*pipx"
+  echo "$out" | grep -q "pipx install"
+  echo "$out" | grep -q "httpie"
+}
+
+@test "render_user_dockerfile pulls in cargo + build deps when cargo manifest non-empty" {
+  load_launcher_funcs
+  manifest_add cargo fd-find > /dev/null
+  out="$(render_user_dockerfile)"
+  echo "$out" | grep -q "apt-get install -y --no-install-recommends.* cargo"
+  echo "$out" | grep -q "build-essential"
+  echo "$out" | grep -q "pkg-config"
+  echo "$out" | grep -q "libssl-dev"
+  echo "$out" | grep -q "cargo install --root /usr/local"
+  echo "$out" | grep -q "fd-find"
+}
+
+@test "render_user_dockerfile drops the apt RUN entirely when no apt-side work is needed" {
+  load_launcher_funcs
+  manifest_add npm prettier > /dev/null
+  out="$(render_user_dockerfile)"
+  ! echo "$out" | grep -q "apt-get install"
+  echo "$out" | grep -q "npm install -g prettier"
+}
