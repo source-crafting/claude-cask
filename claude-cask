@@ -88,6 +88,108 @@ extras_list() {
   fi
 }
 
+manifest_path() { echo "$EXTRAS_DIR/${1}.list"; }
+
+manifest_read() {
+  local f; f="$(manifest_path "$1")"
+  [[ -f "$f" ]] || return 0
+  grep -Ev '^([[:space:]]*$|#)' "$f" || true
+}
+
+manifest_write_sorted() {
+  local eco="$1"; shift
+  mkdir -p "$EXTRAS_DIR"
+  local f; f="$(manifest_path "$eco")"
+  local tmp="${f}.tmp.$$"
+  if [[ $# -eq 0 ]]; then
+    : > "$tmp"
+  else
+    printf '%s\n' "$@" | sort -u > "$tmp"
+  fi
+  mv "$tmp" "$f"
+}
+
+manifest_add() {
+  local eco="$1"; shift
+  local existing=() added=() already=()
+  mapfile -t existing < <(manifest_read "$eco")
+  local pkg
+  for pkg in "$@"; do
+    local found=0 e
+    for e in "${existing[@]+"${existing[@]}"}"; do
+      [[ "$e" == "$pkg" ]] && { found=1; break; }
+    done
+    if [[ $found -eq 1 ]]; then
+      already+=("$pkg")
+    else
+      added+=("$pkg")
+      existing+=("$pkg")
+    fi
+  done
+  manifest_write_sorted "$eco" "${existing[@]+"${existing[@]}"}"
+  if [[ ${#added[@]} -gt 0 ]]; then
+    local sorted_added
+    sorted_added="$(printf '%s\n' "${added[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
+    echo "added: $sorted_added"
+  fi
+  if [[ ${#already[@]} -gt 0 ]]; then
+    local sorted_already
+    sorted_already="$(printf '%s\n' "${already[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
+    echo "already: $sorted_already"
+  fi
+  [[ ${#added[@]} -gt 0 ]]
+}
+
+manifest_remove() {
+  local eco="$1"; shift
+  local existing=() removed=() not_present=()
+  mapfile -t existing < <(manifest_read "$eco")
+  local pkg
+  for pkg in "$@"; do
+    local found=0 e
+    for e in "${existing[@]+"${existing[@]}"}"; do
+      [[ "$e" == "$pkg" ]] && { found=1; break; }
+    done
+    if [[ $found -eq 1 ]]; then
+      removed+=("$pkg")
+    else
+      not_present+=("$pkg")
+    fi
+  done
+  local keep=() e
+  for e in "${existing[@]+"${existing[@]}"}"; do
+    local drop=0 r
+    for r in "${removed[@]+"${removed[@]}"}"; do
+      [[ "$e" == "$r" ]] && { drop=1; break; }
+    done
+    [[ $drop -eq 0 ]] && keep+=("$e")
+  done
+  manifest_write_sorted "$eco" "${keep[@]+"${keep[@]}"}"
+  if [[ ${#removed[@]} -gt 0 ]]; then
+    local sorted_removed
+    sorted_removed="$(printf '%s\n' "${removed[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
+    echo "removed: $sorted_removed"
+  fi
+  if [[ ${#not_present[@]} -gt 0 ]]; then
+    local sorted_not_present
+    sorted_not_present="$(printf '%s\n' "${not_present[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
+    echo "not_present: $sorted_not_present"
+  fi
+  [[ ${#removed[@]} -gt 0 ]]
+}
+
+manifests_all_empty() {
+  local eco
+  for eco in apt npm pip cargo; do
+    [[ -n "$(manifest_read "$eco")" ]] && return 1
+  done
+  return 0
+}
+
+if [[ "${CLAUDE_CASK_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 if [[ $# -gt 0 ]]; then
   case "$1" in
     list)

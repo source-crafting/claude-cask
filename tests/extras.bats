@@ -57,3 +57,27 @@ exit 0'
   echo "$output" | grep -q "^prettier$"
   ! echo "$output" | grep -q "no extras configured"
 }
+
+# Helper: source the launcher's functions without executing the script.
+# We mark a guard env so claude-cask returns early before doing real work.
+load_launcher_funcs() {
+  # shellcheck source=/dev/null
+  CLAUDE_CASK_SOURCE_ONLY=1 source "$REPO_ROOT/claude-cask"
+}
+
+@test "manifest_add deduplicates and sorts" {
+  load_launcher_funcs
+  manifest_add apt ripgrep jq ripgrep > /tmp/out
+  [ "$(manifest_read apt)" = "$(printf 'jq\nripgrep')" ]
+  grep -q "added: jq, ripgrep" /tmp/out
+  grep -q "already: ripgrep" /tmp/out
+}
+
+@test "manifest_remove is idempotent" {
+  load_launcher_funcs
+  manifest_add apt ripgrep jq > /dev/null
+  manifest_remove apt ripgrep nonexistent > /tmp/out
+  [ "$(manifest_read apt)" = "jq" ]
+  grep -q "removed: ripgrep" /tmp/out
+  grep -q "not_present: nonexistent" /tmp/out
+}
