@@ -233,18 +233,22 @@ if [[ -f "$HOME/.claude.json" ]]; then
   DOCKER_ARGS+=(-v "$HOME/.claude.json:/home/claude-cask/.claude.json")
 fi
 
-# Lock down the two persistence vectors inside ~/.claude that, if writable
+# Lock down the persistence vectors inside ~/.claude that, if writable
 # from the container, would let an AI plant code that the host's own claude
 # executes on subsequent sessions:
 #   * settings.json — controls enabledPlugins, hooks, permissions, etc.
-#   * plugins/ — installed plugin code; arbitrary JS/TS that runs in claude.
-# Stack a read-only mount over each on top of the parent ~/.claude (rw)
+#   * plugins/cache/ — installed plugin code (skills, hooks, scripts) that
+#     the runtime actually executes. Locking just cache/ leaves the rest
+#     of plugins/ writable so Claude can manage marketplace state, install
+#     counts, etc. — without that, plugin loading fails when Claude tries
+#     to refresh marketplaces (EROFS on rm of marketplaces/<repo>).
+# Stack read-only mounts over each on top of the parent ~/.claude (rw)
 # mount. Skipped silently when a path doesn't exist on the host.
 if [[ -f "$HOME/.claude/settings.json" ]]; then
   DOCKER_ARGS+=(-v "$HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro")
 fi
-if [[ -d "$HOME/.claude/plugins" ]]; then
-  DOCKER_ARGS+=(-v "$HOME/.claude/plugins:/home/claude-cask/.claude/plugins:ro")
+if [[ -d "$HOME/.claude/plugins/cache" ]]; then
+  DOCKER_ARGS+=(-v "$HOME/.claude/plugins/cache:/home/claude-cask/.claude/plugins/cache:ro")
 fi
 
 # On macOS, Claude Code stores its OAuth token in the Keychain rather than
