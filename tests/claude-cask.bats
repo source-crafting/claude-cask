@@ -773,3 +773,40 @@ exit 0"
   [ "$status" -eq 0 ]
   grep -q "docker run.* -e GIT_AUTHOR_EMAIL=override@example.com" "$STUB_LOG"
 }
+
+@test "claude-cask user.signingkey local override is ignored" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  AGENT_SOCK="$(mktemp -u)"
+  python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])" "$AGENT_SOCK"
+  stub_set gpgconf "#!/usr/bin/env bash
+[[ \"\$1\" == '--list-dirs' && \"\$2\" == 'agent-extra-socket' ]] && echo '$AGENT_SOCK'
+exit 0"
+  stub_set gpg '#!/usr/bin/env bash
+case "$1 $2" in
+  "--export --armor") echo "FAKE PUBLIC KEY" ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+# Local repo claims signingkey LOCALKEY, global has GLOBALKEY.
+if [[ \"\$1 \$2 \$3\" == \"config --get user.signingkey\" ]]; then echo 'LOCALKEY'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'GLOBALKEY'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e CLAUDE_CASK_SIGNING_KEY=GLOBALKEY" "$STUB_LOG"
+  ! grep -q "CLAUDE_CASK_SIGNING_KEY=LOCALKEY" "$STUB_LOG"
+
+  rm -f "$AGENT_SOCK"
+}
