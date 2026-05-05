@@ -675,6 +675,26 @@ DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
     echo "  signing:      disabled (no host user.signingkey)"
   fi
   echo "  network:      open (full outbound)"
+  apt_n=$(manifest_read apt | wc -l | tr -d ' ')
+  npm_n=$(manifest_read npm | wc -l | tr -d ' ')
+  pip_n=$(manifest_read pip | wc -l | tr -d ' ')
+  cargo_n=$(manifest_read cargo | wc -l | tr -d ' ')
+  parts=()
+  [[ $apt_n   -gt 0 ]] && parts+=("$apt_n apt")
+  [[ $npm_n   -gt 0 ]] && parts+=("$npm_n npm")
+  [[ $pip_n   -gt 0 ]] && parts+=("$pip_n pip")
+  [[ $cargo_n -gt 0 ]] && parts+=("$cargo_n cargo")
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    echo "  extras:       none  ($IMAGE)"
+  elif [[ "${BARE:-0}" -eq 1 ]]; then
+    joined="$(printf '%s, ' "${parts[@]}")"
+    joined="${joined%, }"
+    echo "  extras:       skipped (--bare) — $joined in manifest"
+  else
+    joined="$(printf '%s, ' "${parts[@]}")"
+    joined="${joined%, }"
+    echo "  extras:       $joined  ($IMAGE)"
+  fi
   # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
   # the assumption that makes a persistent credentials file at rest roughly
   # equivalent to the keychain. If it's off, the user should know.

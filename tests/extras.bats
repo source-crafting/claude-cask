@@ -420,6 +420,54 @@ exit 0'
   ! grep -q "docker run" "$STUB_LOG"
 }
 
+@test "pre-flight summary shows 'extras:' line with manifest counts" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  printf "ripgrep\njq\n" > "$HOME/.config/claude-cask/apt.list"
+  printf "prettier\n"     > "$HOME/.config/claude-cask/npm.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE "extras: +2 apt, 1 npm.*claude-cask:user"
+}
+
+@test "pre-flight summary shows 'extras: none' when manifests are empty" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE "extras: +none.*claude-cask:latest"
+}
+
+@test "pre-flight summary shows 'skipped (--bare)' when --bare with extras present" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --bare
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE "extras: +skipped \(--bare\).*1 apt"
+}
+
 @test "--update-claude-code passes CLAUDE_CODE_VERSION build-arg, rebuilds, exits" {
   stub_set docker "$(stub_docker_capture_stdin)"
   # `npm view ... version` is called on the host to resolve "latest".
