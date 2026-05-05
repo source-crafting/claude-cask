@@ -469,6 +469,12 @@ if [[ $REBUILD -eq 0 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
   fi
 fi
 
+# When the user explicitly asked --rebuild, serialize against concurrent
+# install/remove/--rebuild so we don't redundantly rebuild :latest twice.
+if [[ "${EXPLICIT_REBUILD:-0}" -eq 1 ]]; then
+  acquire_extras_lock
+fi
+
 if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build \
     --build-arg "USER_UID=$HOST_UID" \
@@ -482,7 +488,6 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 if [[ "${EXPLICIT_REBUILD:-0}" -eq 1 ]]; then
-  acquire_extras_lock
   if ! manifests_all_empty; then
     if ! build_user_image; then
       echo "claude-cask: docker build failed for claude-cask:user" >&2
