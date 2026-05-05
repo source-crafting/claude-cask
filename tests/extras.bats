@@ -314,3 +314,22 @@ exit 0'
   grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
   ! grep -q "docker run.* claude-cask:user" "$STUB_LOG"
 }
+
+@test "--bare forces :latest even when manifests are non-empty" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --bare
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
+  ! grep -q "docker run.* claude-cask:user" "$STUB_LOG"
+  ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+}

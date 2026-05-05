@@ -34,6 +34,7 @@ AUTO_MODE=0
 REBUILD=0
 KEEP_CONTAINER=0
 EXTRA_ARGS=()
+BARE=0
 
 usage() {
   cat <<'EOF'
@@ -54,6 +55,8 @@ OPTIONS:
                     <id>` are available for post-mortem debugging. The
                     launcher prints the container id and cleanup hints at
                     exit. You're responsible for `docker rm` when done.
+  --bare            Launch with claude-cask:latest even when user-extras
+                    manifests are populated (skips claude-cask:user).
   -h, --help        Show this help
 
 The current working directory is mounted at the same path inside the container.
@@ -381,6 +384,7 @@ while [[ $# -gt 0 ]]; do
     --auto)            AUTO_MODE=1; shift ;;
     --rebuild)         REBUILD=1; shift ;;
     --keep-container)  KEEP_CONTAINER=1; shift ;;
+    --bare)            BARE=1; shift ;;
     -h|--help)         usage; exit 0 ;;
     --)                shift; EXTRA_ARGS+=("$@"); break ;;
     -*)                echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
