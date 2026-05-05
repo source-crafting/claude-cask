@@ -302,13 +302,37 @@ STUB
 }
 
 @test "TUI launch uses :latest when all manifests are empty" {
-  stub_set docker "$(stub_docker_capture_stdin)"
   stub_set git '#!/usr/bin/env bash
 case "$1 $2 $3" in
   "config --get user.name")  echo "Test User"; exit 0 ;;
   "config --get user.email") echo "test@example.com"; exit 0 ;;
 esac
 exit 0'
+
+  ACTUAL_SRC_HASH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  ACTUAL_UID="$(id -u)"
+  ACTUAL_GID="$(id -g)"
+  export ACTUAL_SRC_HASH ACTUAL_UID ACTUAL_GID
+
+  cat > "$STUB_BIN/docker" <<'STUB'
+#!/usr/bin/env bash
+{ printf 'docker'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$3" == "--format" ]]; then
+    fmt="$4"
+    case "$fmt" in
+      *claude-cask.uid*)        echo "$ACTUAL_UID" ;;
+      *claude-cask.gid*)        echo "$ACTUAL_GID" ;;
+      *claude-cask.image-hash*) echo "$ACTUAL_SRC_HASH" ;;
+    esac
+    exit 0
+  fi
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$STUB_BIN/docker"
+
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
   grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
@@ -316,6 +340,49 @@ exit 0'
 }
 
 @test "--bare forces :latest even when manifests are non-empty" {
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  ACTUAL_SRC_HASH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  ACTUAL_UID="$(id -u)"
+  ACTUAL_GID="$(id -g)"
+  export ACTUAL_SRC_HASH ACTUAL_UID ACTUAL_GID
+
+  cat > "$STUB_BIN/docker" <<'STUB'
+#!/usr/bin/env bash
+{ printf 'docker'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$3" == "--format" ]]; then
+    fmt="$4"
+    case "$fmt" in
+      *claude-cask.uid*)        echo "$ACTUAL_UID" ;;
+      *claude-cask.gid*)        echo "$ACTUAL_GID" ;;
+      *claude-cask.image-hash*) echo "$ACTUAL_SRC_HASH" ;;
+      *claude-cask.user-hash*)  echo "" ;;
+    esac
+    exit 0
+  fi
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$STUB_BIN/docker"
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --bare
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
+  ! grep -q "docker run.* claude-cask:user" "$STUB_LOG"
+  ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+}
+
+@test "--rebuild rebuilds :latest, then :user (when non-empty), and exits without TUI" {
   stub_set docker "$(stub_docker_capture_stdin)"
   stub_set git '#!/usr/bin/env bash
 case "$1 $2 $3" in
@@ -327,9 +394,28 @@ exit 0'
   mkdir -p "$HOME/.config/claude-cask"
   echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
 
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --bare
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
   [ "$status" -eq 0 ]
-  grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
-  ! grep -q "docker run.* claude-cask:user" "$STUB_LOG"
+  # :latest rebuilt
+  grep -q "docker build .* -t claude-cask:latest " "$STUB_LOG"
+  # :user rebuilt
+  grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+  # No TUI launch
+  ! grep -q "docker run" "$STUB_LOG"
+}
+
+@test "--rebuild with empty manifests rebuilds only :latest" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --rebuild
+  [ "$status" -eq 0 ]
+  grep -q "docker build .* -t claude-cask:latest " "$STUB_LOG"
   ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+  ! grep -q "docker run" "$STUB_LOG"
 }
