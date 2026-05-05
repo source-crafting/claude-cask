@@ -394,7 +394,8 @@ echo "Linux"'
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run --rm" "$STUB_LOG"
+  # Launcher composes `docker run -it --rm …` so allow flags between.
+  grep -q "docker run.* --rm" "$STUB_LOG"
   ! grep -q "docker run.* --cidfile" "$STUB_LOG"
 }
 
