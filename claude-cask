@@ -209,6 +209,11 @@ DOCKER_ARGS+=(
   -w "$PWD"
   -e "CLAUDE_CASK_WORKDIR=$PWD"
   -v "$HOME/.claude:/home/claude-cask/.claude"
+  # Forward the host home path so the entrypoint can symlink it to
+  # /home/claude-cask. Plugin metadata under ~/.claude (installPath,
+  # installLocation) records absolute host paths; the symlink makes
+  # those paths resolve inside the container so skills load.
+  -e "HOST_HOME=$HOME"
   -e "GIT_AUTHOR_NAME=$GIT_NAME"
   -e "GIT_AUTHOR_EMAIL=$GIT_EMAIL"
   -e "GIT_COMMITTER_NAME=$GIT_NAME"

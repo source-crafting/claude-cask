@@ -16,6 +16,18 @@ if [[ "$(id -u)" -eq 0 ]]; then
     ln -sfn /run/host-gpg-agent /home/claude-cask/.gnupg/S.gpg-agent
   fi
 
+  # Make the host home path resolve to the container user's home so that
+  # absolute-host-path references inside ~/.claude metadata files (notably
+  # `installPath` in plugins/installed_plugins.json and `installLocation`
+  # in plugins/known_marketplaces.json) point at the bind-mounted plugin
+  # tree instead of a non-existent path. Without this, the container's
+  # plugin loader fails to find skill files and host-side skills are
+  # silently unavailable inside the container.
+  if [[ -n "${HOST_HOME:-}" && "$HOST_HOME" != /home/claude-cask ]]; then
+    mkdir -p "$(dirname "$HOST_HOME")"
+    ln -sfn /home/claude-cask "$HOST_HOME"
+  fi
+
   exec gosu claude-cask "$0" "$@"
 fi
 

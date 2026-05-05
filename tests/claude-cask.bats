@@ -810,3 +810,66 @@ exit 0"
 
   rm -f "$AGENT_SOCK"
 }
+
+@test "claude-cask forwards HOST_HOME so plugin paths resolve in container" {
+  launcher_default_stubs
+  HOME="/Users/testuser"
+  export HOME
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e HOST_HOME=/Users/testuser" "$STUB_LOG"
+}
+
+@test "entrypoint creates HOST_HOME symlink to /home/claude-cask" {
+  # Run the entrypoint's root-side setup in a sandbox: redirect mkdir/ln
+  # via stubs and confirm the right ln -sfn invocation is issued. The
+  # real entrypoint exec's gosu after the symlink, so we use a gosu stub
+  # that records and exits.
+  stub_set gosu '#!/usr/bin/env bash
+echo "gosu $@" >> "$STUB_LOG"
+exit 0'
+
+  # The entrypoint's privileged section only runs when EUID==0, but the
+  # tests run as a regular user. Point id at a stub that lies.
+  stub_set id '#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then echo 0; exit 0; fi
+exit 0'
+
+  # Capture mkdir + ln so we don't actually mutate the test host's FS.
+  stub_set mkdir '#!/usr/bin/env bash
+echo "mkdir $@" >> "$STUB_LOG"
+exit 0'
+  stub_set ln '#!/usr/bin/env bash
+echo "ln $@" >> "$STUB_LOG"
+exit 0'
+
+  HOST_HOME="/Users/testuser"
+  export HOST_HOME GIT_AUTHOR_NAME="Test User" GIT_AUTHOR_EMAIL="test@example.com"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh"
+
+  # We don't assert exit status — the entrypoint exec's gosu, which our
+  # stub turns into a no-op exit 0; we care that the symlink was issued.
+  grep -q "^mkdir -p /Users$" "$STUB_LOG"
+  grep -q "^ln -sfn /home/claude-cask /Users/testuser$" "$STUB_LOG"
+}
+
+@test "entrypoint skips HOST_HOME symlink when value matches container home" {
+  stub_set gosu '#!/usr/bin/env bash
+echo "gosu $@" >> "$STUB_LOG"
+exit 0'
+  stub_set id '#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then echo 0; exit 0; fi
+exit 0'
+  stub_set mkdir '#!/usr/bin/env bash
+echo "mkdir $@" >> "$STUB_LOG"
+exit 0'
+  stub_set ln '#!/usr/bin/env bash
+echo "ln $@" >> "$STUB_LOG"
+exit 0'
+
+  HOST_HOME="/home/claude-cask"
+  export HOST_HOME GIT_AUTHOR_NAME="Test User" GIT_AUTHOR_EMAIL="test@example.com"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh"
+
+  ! grep -q "^ln -sfn /home/claude-cask /home/claude-cask" "$STUB_LOG"
+}
