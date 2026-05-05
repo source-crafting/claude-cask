@@ -419,3 +419,26 @@ exit 0'
   ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
   ! grep -q "docker run" "$STUB_LOG"
 }
+
+@test "--update-claude-code passes CLAUDE_CODE_VERSION build-arg, rebuilds, exits" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  # `npm view ... version` is called on the host to resolve "latest".
+  stub_set npm '#!/usr/bin/env bash
+case "$1 $2" in
+  "view @anthropic-ai/claude-code") echo "9.9.9"; exit 0 ;;
+esac
+exit 0'
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  [ "$status" -eq 0 ]
+  grep -q "docker build.*--build-arg CLAUDE_CODE_VERSION=9\.9\.9" "$STUB_LOG"
+  grep -q "docker build.* -t claude-cask:latest " "$STUB_LOG"
+  echo "$output" | grep -q "claude-code updated to 9.9.9"
+  ! grep -q "docker run" "$STUB_LOG"
+}
