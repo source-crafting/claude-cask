@@ -186,6 +186,45 @@ manifests_all_empty() {
   return 0
 }
 
+parse_eco_flag() {
+  # On success, sets global ECO from --apt/--npm/--pip/--cargo.
+  # The CALLER is responsible for the matching shift after success.
+  case "${1:-}" in
+    --apt|--npm|--pip|--cargo) ECO="${1#--}"; return 0 ;;
+    *) echo "claude-cask: install/remove require an ecosystem flag (--apt|--npm|--pip|--cargo)" >&2; return 2 ;;
+  esac
+}
+
+acquire_extras_lock() {
+  mkdir -p "$EXTRAS_DIR"
+  exec 9>"$EXTRAS_DIR/.lock"
+  if ! flock -n 9; then
+    echo "claude-cask: another install/remove/rebuild is in progress" >&2
+    exit 1
+  fi
+}
+
+build_user_image() {
+  # Reads the rendered Dockerfile on stdin. Returns docker's exit code.
+  render_user_dockerfile | docker build -t claude-cask:user -
+}
+
+extras_install() {
+  parse_eco_flag "$@" || exit $?
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "claude-cask: install --$ECO requires at least one package" >&2
+    exit 2
+  fi
+  acquire_extras_lock
+  manifest_add "$ECO" "$@"
+  if ! build_user_image; then
+    echo "claude-cask: docker build failed for claude-cask:user" >&2
+    exit 1
+  fi
+  echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
+}
+
 render_user_dockerfile() {
   local apt_pkgs npm_pkgs pip_pkgs cargo_pkgs
   apt_pkgs="$(manifest_read apt | tr '\n' ' ')"
@@ -265,8 +304,13 @@ if [[ $# -gt 0 ]]; then
       extras_list
       exit 0
       ;;
-    install|remove)
-      echo "claude-cask: '$1' not yet implemented" >&2
+    install)
+      shift
+      extras_install "$@"
+      exit $?
+      ;;
+    remove)
+      echo "claude-cask: 'remove' not yet implemented" >&2
       exit 1
       ;;
   esac

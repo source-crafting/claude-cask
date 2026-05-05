@@ -123,3 +123,37 @@ load_launcher_funcs() {
   ! echo "$out" | grep -q "apt-get install"
   echo "$out" | grep -q "npm install -g prettier"
 }
+
+@test "install --apt writes manifest and triggers docker build for :user" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt ripgrep jq
+
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "added: jq, ripgrep"
+  [ -f "$HOME/.config/claude-cask/apt.list" ]
+  grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+  grep -q "^FROM claude-cask:latest$" "$STUB_BIN/docker-stdin.last"
+  grep -q "ripgrep" "$STUB_BIN/docker-stdin.last"
+  ! grep -q "^docker run" "$STUB_LOG"
+}
+
+@test "install with no --eco flag exits with usage error" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install ripgrep
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "ecosystem"
+}
+
+@test "install with no packages exits with usage error" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "package"
+}
