@@ -257,6 +257,32 @@ extras_install() {
   echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
 }
 
+extras_remove() {
+  parse_eco_flag "$@" || exit $?
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "claude-cask: remove --$ECO requires at least one package" >&2
+    exit 2
+  fi
+  acquire_extras_lock
+  local snap; snap="$(manifest_snapshot)"
+  if ! manifest_remove "$ECO" "$@"; then
+    # Nothing was actually present — exit 0, no rebuild.
+    return 0
+  fi
+  if manifests_all_empty; then
+    docker rmi claude-cask:user >/dev/null 2>&1 || true
+    echo "claude-cask: all manifests empty; claude-cask:user untagged"
+    return 0
+  fi
+  if ! build_user_image; then
+    echo "claude-cask: docker build failed; rolling back $ECO manifest" >&2
+    printf '%s' "$snap" | manifest_restore
+    exit 1
+  fi
+  echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
+}
+
 render_user_dockerfile() {
   local apt_pkgs npm_pkgs pip_pkgs cargo_pkgs
   apt_pkgs="$(manifest_read apt | tr '\n' ' ')"
@@ -342,8 +368,9 @@ if [[ $# -gt 0 ]]; then
       exit $?
       ;;
     remove)
-      echo "claude-cask: 'remove' not yet implemented" >&2
-      exit 1
+      shift
+      extras_remove "$@"
+      exit $?
       ;;
   esac
 fi

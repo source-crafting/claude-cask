@@ -181,3 +181,58 @@ exit 0'
   # Manifest is exactly what it was before — no `jq`.
   diff <(echo "ripgrep") "$HOME/.config/claude-cask/apt.list"
 }
+
+@test "remove --apt strips entries and rebuilds :user" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  printf "ripgrep\njq\n" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" remove --apt ripgrep
+  [ "$status" -eq 0 ]
+  diff <(echo "jq") "$HOME/.config/claude-cask/apt.list"
+  grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+  ! grep -q "^docker rmi" "$STUB_LOG"
+}
+
+@test "remove of unknown package is idempotent (exit 0, no rebuild)" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" remove --apt nothere
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "not_present: nothere"
+  ! grep -q "^docker build" "$STUB_LOG"
+}
+
+@test "removing the last entry across all manifests untags claude-cask:user" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" remove --apt ripgrep
+  [ "$status" -eq 0 ]
+  ! grep -q "^docker build" "$STUB_LOG"
+  grep -q "^docker rmi claude-cask:user$" "$STUB_LOG"
+  [ ! -s "$HOME/.config/claude-cask/apt.list" ]
+}
