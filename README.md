@@ -5,8 +5,8 @@ Run Claude Code inside an ephemeral Docker container with the host working direc
 ## Requirements
 
 - macOS (Docker Desktop) or Linux with a working Docker daemon
-- `git` configured with at least `user.name` and `user.email` (local repo config overrides global — see *Git identity precedence* below)
-- For signed commits: `user.signingkey` set **globally** and `gpg-agent` running. On macOS Docker Desktop, file sharing must include `~/.gnupg`.
+- `git` configured with at least `user.name` and `user.email` (see *Git identity precedence* below for how local repo config interacts with global)
+- For signed commits: `user.signingkey` set and `gpg-agent` running. On macOS Docker Desktop, file sharing must include `~/.gnupg`.
 
 ## Install
 
@@ -99,11 +99,9 @@ This means bind-mounted files are owned by the same UID inside the container as 
 
 ## Git identity precedence
 
-`user.name` and `user.email` follow git's normal precedence inside the launched workspace: a value set in the local repo config (`git config --local user.email work@example.com`) overrides the global value. Use this to commit as different identities in different repos without changing global config.
+All four git config values the launcher reads — `user.name`, `user.email`, `user.signingkey`, `commit.gpgsign` — follow git's normal precedence inside the launched workspace: a value set in the local repo config (e.g. `git config --local user.signingkey ABCD1234`) overrides the global value. This lets each repo have its own identity and signing key without juggling global config.
 
-`user.signingkey` and `commit.gpgsign` are read **only from your global config**. The driving reason is `user.signingkey`: the launcher exports exactly that key from your host keyring and bind-mounts it read-only, and a per-repo file steering which host key gets exported is a footgun the launcher chooses not to expose. `commit.gpgsign` rides along with the same global-only treatment for consistency, so signing policy is set in one place.
-
-If you need a different signing key for a specific project, change your global `user.signingkey` before launching.
+The launcher's pre-flight summary prints the resolved signing key before starting the container, so a per-repo override is always auditable: if a repo's `.git/config` selects a key you didn't expect, you'll see it and can abort at the `Continue? [Y/n]` prompt. The host keyring still has to actually contain whichever key the resolution lands on — the launcher only forwards keys you already trust on the host.
 
 ## GPG security model
 
@@ -116,7 +114,7 @@ The container can sign commits using the host's `gpg-agent` because:
 - Its keyring contains the public key for the one configured signing key
 - The host's `gpg-agent` *extra* socket is bind-mounted at `/run/host-gpg-agent`. Docker Desktop on macOS presents that bind-mount as `root:root` mode 660 inside the container, so the entrypoint (running briefly as root) `chown`s it to `claude-cask` and creates a symlink at `~claude-cask/.gnupg/S.gpg-agent`. The unprivileged `claude-cask` user then connects directly to the host's agent through that path. The chown/symlink only changes the container's view; it doesn't touch host-side ownership. No long-running root process or proxy is involved.
 
-If `git config --global user.signingkey` is unset, no GPG mounts are added and signing simply isn't available inside the container.
+If `user.signingkey` resolves to nothing (neither the workspace's local repo config nor the global config sets it), no GPG mounts are added and signing simply isn't available inside the container.
 
 ## Security
 

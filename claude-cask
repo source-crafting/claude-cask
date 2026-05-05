@@ -88,13 +88,13 @@ HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
 [[ "$HOST_UID" -eq 0 ]] && { echo "claude-cask: refusing to run as root (UID 0)" >&2; exit 1; }
 
-# user.name and user.email follow git's normal precedence (local repo
-# config wins over global). user.signingkey and commit.gpgsign below stay
-# --global on purpose — see README "Git identity precedence".
+# All four reads follow git's normal precedence: local repo config wins
+# over global. The pre-flight summary surfaces the resolved signing key
+# before the container starts, so per-repo overrides remain auditable.
 GIT_NAME="$(git config --get user.name  || true)"
 GIT_EMAIL="$(git config --get user.email || true)"
-SIGNING_KEY="$(git config --global --get user.signingkey || true)"
-GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
+SIGNING_KEY="$(git config --get user.signingkey || true)"
+GPG_SIGN="$(git config --get commit.gpgsign || echo false)"
 
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
