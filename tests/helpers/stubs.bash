@@ -38,7 +38,7 @@ stub_called() {
 stub_docker_capture_stdin() {
   cat <<'STUB'
 #!/usr/bin/env bash
-echo "docker $@" >> "$STUB_LOG"
+{ printf 'docker'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
 if [[ "$1" == "build" ]]; then
   for a in "$@"; do
     if [[ "$a" == "-" ]]; then
@@ -47,6 +47,7 @@ if [[ "$1" == "build" ]]; then
     fi
   done
 fi
+# Pretend any image exists; tests can override per-call when they need a miss.
 case "$1" in
   image) [[ "$2" == "inspect" ]] && exit 0 ;;
 esac
