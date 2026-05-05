@@ -6,6 +6,11 @@ setup() {
   stub_init
   HOME="$(mktemp -d)"
   export HOME
+  # Detach stdin from any inherited tty so the launcher's pre-flight
+  # `Continue? [Y/n]` prompt (gated on `[[ -t 0 ]]`) doesn't hang the
+  # suite when bats itself was invoked interactively. Subprocesses
+  # spawned by `run` inherit this disconnected stdin.
+  exec </dev/null
 }
 
 teardown() {
@@ -149,7 +154,8 @@ exit 0'
 
 @test "claude-cask skips pre-flight prompt when stdin is not a tty" {
   launcher_default_stubs
-  # bats run does not allocate a tty, so [[ -t 0 ]] is false → no prompt.
+  # setup() exec's </dev/null, so the spawned bash sees stdin as a regular
+  # file (not a tty) and the [[ -t 0 ]] prompt gate is false → no prompt.
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
   [[ "$output" != *"Continue?"* ]]
