@@ -122,3 +122,7 @@ bats tests/claude-cask.bats           # unit
 bats tests/integration/smoke.bats    # integration (builds image)
 shellcheck claude-cask entrypoint.sh  # lint
 ```
+
+---
+
+claude-cask is an unofficial wrapper. It launches Claude Code inside a container but does not modify it or distribute it. Claude Code itself is a product of Anthropic and your use of it through this tool is subject to Anthropic's [usage policies](https://www.anthropic.com/legal/aup) and the terms applicable to your Claude account. This project is not affiliated with or endorsed by Anthropic.
