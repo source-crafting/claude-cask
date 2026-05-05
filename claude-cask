@@ -261,7 +261,10 @@ extras_install() {
   fi
   acquire_extras_lock
   local snap; snap="$(manifest_snapshot)"
-  manifest_add "$ECO" "$@"
+  if ! manifest_add "$ECO" "$@"; then
+    # All duplicates — nothing changed, no rebuild needed.
+    return 0
+  fi
   if ! build_user_image; then
     echo "claude-cask: docker build failed; rolling back $ECO manifest" >&2
     printf '%s' "$snap" | manifest_restore

@@ -490,3 +490,21 @@ exit 0'
   echo "$output" | grep -q "claude-code updated to 9.9.9"
   ! grep -q "docker run" "$STUB_LOG"
 }
+
+@test "install of a duplicate exits 0 with 'already' message and no rebuild" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt ripgrep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "already: ripgrep"
+  ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+}
