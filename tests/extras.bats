@@ -157,3 +157,27 @@ exit 0'
   [ "$status" -ne 0 ]
   echo "$output" | grep -qi "package"
 }
+
+@test "install rolls back manifest when docker build fails" {
+  # docker build exits 1; everything else is OK.
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+if [[ "$1" == "build" ]]; then exit 1; fi
+case "$1" in image) [[ "$2" == "inspect" ]] && exit 0 ;; esac
+exit 0'
+
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt jq
+  [ "$status" -ne 0 ]
+  # Manifest is exactly what it was before — no `jq`.
+  diff <(echo "ripgrep") "$HOME/.config/claude-cask/apt.list"
+}

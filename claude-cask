@@ -186,6 +186,36 @@ manifests_all_empty() {
   return 0
 }
 
+manifest_snapshot() {
+  # Echoes a snapshot blob that manifest_restore can consume.
+  local eco f
+  for eco in apt npm pip cargo; do
+    f="$(manifest_path "$eco")"
+    if [[ -f "$f" ]]; then
+      echo "==FILE==$eco"
+      cat "$f"
+      echo "==END=="
+    else
+      echo "==ABSENT==$eco"
+    fi
+  done
+}
+
+manifest_restore() {
+  # Reads the blob from stdin and rewrites all four manifests.
+  mkdir -p "$EXTRAS_DIR"
+  local line eco buf=""
+  local mode=""
+  while IFS= read -r line; do
+    case "$line" in
+      "==FILE=="*)   eco="${line#==FILE==}"; mode=file; buf="" ;;
+      "==ABSENT=="*) eco="${line#==ABSENT==}"; rm -f "$(manifest_path "$eco")"; mode="" ;;
+      "==END==")     printf '%s' "$buf" > "$(manifest_path "$eco")"; mode="" ;;
+      *)             [[ "$mode" == file ]] && buf+="$line"$'\n' ;;
+    esac
+  done
+}
+
 parse_eco_flag() {
   # On success, sets global ECO from --apt/--npm/--pip/--cargo.
   # The CALLER is responsible for the matching shift after success.
@@ -217,9 +247,11 @@ extras_install() {
     exit 2
   fi
   acquire_extras_lock
+  local snap; snap="$(manifest_snapshot)"
   manifest_add "$ECO" "$@"
   if ! build_user_image; then
-    echo "claude-cask: docker build failed for claude-cask:user" >&2
+    echo "claude-cask: docker build failed; rolling back $ECO manifest" >&2
+    printf '%s' "$snap" | manifest_restore
     exit 1
   fi
   echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
