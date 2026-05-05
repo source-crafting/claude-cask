@@ -1,3 +1,13 @@
+```
+ ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗     ██████╗ █████╗ ███████╗██╗  ██╗
+██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝    ██╔════╝██╔══██╗██╔════╝██║ ██╔╝
+██║     ██║     ███████║██║   ██║██║  ██║█████╗      ██║     ███████║███████╗█████╔╝ 
+██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝      ██║     ██╔══██║╚════██║██╔═██╗ 
+╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗    ╚██████╗██║  ██║███████║██║  ██╗
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
+                  Claude Code, sealed in an ephemeral cask.
+```
+
 # claude-cask
 
 Run Claude Code inside an ephemeral Docker container with the host working directory mounted, the host `~/.claude` config forwarded, Opus by default, safe-mode permission prompts, and signed commits using exactly one of the host's GPG keys (no private key material exposed to the container).
