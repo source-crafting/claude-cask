@@ -101,7 +101,7 @@ This means bind-mounted files are owned by the same UID inside the container as 
 
 `user.name` and `user.email` follow git's normal precedence inside the launched workspace: a value set in the local repo config (`git config --local user.email work@example.com`) overrides the global value. Use this to commit as different identities in different repos without changing global config.
 
-`user.signingkey` and `commit.gpgsign` are read **only from your global config**. Local overrides for those are intentionally ignored so that the GPG key forwarded into the container is predictable: the launcher exports exactly that key from your host keyring and bind-mounts it read-only. A local-config detour for the signing key would mean a per-repo file could steer which host key gets exported, which is a footgun the launcher chooses not to expose.
+`user.signingkey` and `commit.gpgsign` are read **only from your global config**. The driving reason is `user.signingkey`: the launcher exports exactly that key from your host keyring and bind-mounts it read-only, and a per-repo file steering which host key gets exported is a footgun the launcher chooses not to expose. `commit.gpgsign` rides along with the same global-only treatment for consistency, so signing policy is set in one place.
 
 If you need a different signing key for a specific project, change your global `user.signingkey` before launching.
 
