@@ -66,6 +66,30 @@ claude-cask -- --resume my-task   # forward args to claude
 
 **`--keep-container`.** By default `docker run --rm` is used, so when something goes wrong mid-session the container is gone the moment claude exits and there's nothing to `docker logs`. Pass `--keep-container` to drop `--rm` and capture the container id; the launcher prints `docker logs` / `docker inspect` / `docker rm` cleanup hints at exit. You're responsible for `docker rm` when done debugging.
 
+## Managing user extras
+
+Add OS or language packages to a per-user image layered on top of the
+base image. Edits live in `~/.config/claude-cask/{apt,npm,pip,cargo}.list`.
+
+```bash
+claude-cask install --apt   ripgrep jq httpie
+claude-cask install --npm   prettier
+claude-cask install --pip   httpie
+claude-cask install --cargo fd-find
+
+claude-cask remove  --apt   jq
+
+claude-cask list                  # show current manifests
+claude-cask --bare                # launch without the user image
+claude-cask --rebuild             # rebuild base + user image (no TUI)
+claude-cask --update-claude-code  # rebuild with the latest claude-code (no TUI)
+```
+
+`install`/`remove`/`list` and the `--rebuild` / `--update-claude-code`
+flags perform their action and exit — they do not launch the Claude TUI.
+The `:user` image is created lazily on the first `install` and removed
+automatically when all manifests are emptied.
+
 ## What gets mounted
 
 | Host path                     | Container path                                                                                                | Notes                                                                                                                                                                                                                                                                                                                                         |
