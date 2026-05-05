@@ -10,10 +10,14 @@ Run Claude Code inside an ephemeral Docker container with the host working direc
 
 ## Install
 
+Clone the repo to wherever you keep tools, then symlink the launcher onto your `PATH`:
+
 ```bash
-git clone <this-repo> ~/claude-cask
-ln -s ~/claude-cask/claude-cask /usr/local/bin/claude-cask
+git clone git@github.com:source-crafting/claude-cask.git <install-dir>
+ln -s <install-dir>/claude-cask /usr/local/bin/claude-cask
 ```
+
+Replace `<install-dir>` with the path you cloned into (e.g. `~/tools/claude-cask`, `/opt/claude-cask`). The launcher resolves its own location via the symlink, so it works from any clone path.
 
 ## Building the image
 
