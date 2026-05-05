@@ -30,3 +30,26 @@ stub_set() {
 stub_called() {
   grep -q "^$1" "$STUB_LOG"
 }
+
+# Returns a docker-stub script body that records argv to STUB_LOG and,
+# when invoked as `docker build ... -`, copies stdin to
+# $STUB_BIN/docker-stdin.last so tests can inspect the generated Dockerfile.
+# Always exits 0; tests that need failures override with stub_set directly.
+stub_docker_capture_stdin() {
+  cat <<'STUB'
+#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+if [[ "$1" == "build" ]]; then
+  for a in "$@"; do
+    if [[ "$a" == "-" ]]; then
+      cat > "$(dirname "$0")/docker-stdin.last"
+      break
+    fi
+  done
+fi
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0
+STUB
+}
