@@ -233,23 +233,18 @@ if [[ -f "$HOME/.claude.json" ]]; then
   DOCKER_ARGS+=(-v "$HOME/.claude.json:/home/claude-cask/.claude.json")
 fi
 
-# Lock down the persistence vectors inside ~/.claude that, if writable
-# from the container, would let an AI plant code that the host's own claude
-# executes on subsequent sessions:
-#   * settings.json — controls enabledPlugins, hooks, permissions, etc.
-#   * plugins/cache/ — installed plugin code (skills, hooks, scripts) that
-#     the runtime actually executes. Locking just cache/ leaves the rest
-#     of plugins/ writable so Claude can manage marketplace state, install
-#     counts, etc. — without that, plugin loading fails when Claude tries
-#     to refresh marketplaces (EROFS on rm of marketplaces/<repo>).
-# Stack read-only mounts over each on top of the parent ~/.claude (rw)
-# mount. Skipped silently when a path doesn't exist on the host.
-if [[ -f "$HOME/.claude/settings.json" ]]; then
-  DOCKER_ARGS+=(-v "$HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro")
-fi
-if [[ -d "$HOME/.claude/plugins/cache" ]]; then
-  DOCKER_ARGS+=(-v "$HOME/.claude/plugins/cache:/home/claude-cask/.claude/plugins/cache:ro")
-fi
+# Note on the threat model: ~/.claude is mounted RW so Claude inside the
+# container can manage its own state — install/uninstall plugins, refresh
+# marketplaces, update enabledPlugins in settings.json, write sessions, etc.
+# That means an in-container AI *could*, in principle, plant code that a
+# subsequent host claude session would execute (e.g., a malicious skill in
+# plugins/cache/, or a "hooks" entry in settings.json that runs arbitrary
+# shell on session events). claude-cask trusts the in-container AI not to
+# do that — same trust you're already placing in it for everything else
+# inside the container's bounds. If you want stricter isolation, layer
+# read-only mounts over plugins/cache/ and settings.json yourself; expect
+# plugin install/uninstall and marketplace refresh to break inside the
+# container if you do, since both write to those paths.
 
 # On macOS, Claude Code stores its OAuth token in the Keychain rather than
 # in any file. The Linux Claude Code inside the container reads it from

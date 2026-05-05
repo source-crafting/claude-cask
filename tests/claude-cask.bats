@@ -434,42 +434,18 @@ exit 0"
   grep -q "docker run.*--not-a-real-flag value" "$STUB_LOG"
 }
 
-@test "claude-cask mounts ~/.claude/settings.json read-only when present" {
+@test "claude-cask does not RO-mount settings.json or any of plugins/" {
+  # ~/.claude is mounted RW so Claude can manage its own state inside the
+  # container (install plugins, refresh marketplaces, update enabledPlugins
+  # in settings.json). No RO overlays are layered on top of those paths.
   launcher_default_stubs
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME/.claude/plugins/cache"
   echo "{}" > "$HOME/.claude/settings.json"
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.*-v $HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro" "$STUB_LOG"
-}
-
-@test "claude-cask mounts ~/.claude/plugins/cache read-only when present" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude/plugins/cache"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  grep -q "docker run.*-v $HOME/.claude/plugins/cache:/home/claude-cask/.claude/plugins/cache:ro" "$STUB_LOG"
-}
-
-@test "claude-cask does not RO-mount plugins/ as a whole (marketplaces etc. need RW)" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude/plugins/cache"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  # The narrower cache mount is present, but no whole-plugins RO mount.
-  ! grep -qE "docker run.*-v $HOME/\.claude/plugins:/home/claude-cask/\.claude/plugins:ro" "$STUB_LOG"
-}
-
-@test "claude-cask omits settings.json/plugins-cache RO mounts when absent" {
-  launcher_default_stubs
-  # HOME is fresh tmp; neither path exists.
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
   ! grep -q "settings.json:.*:ro" "$STUB_LOG"
-  ! grep -q "plugins/cache:.*:ro" "$STUB_LOG"
+  ! grep -q "plugins.*:ro" "$STUB_LOG"
 }
 
 @test "claude-cask mirrors PWD at the same in-container path (no /workspace collision)" {
