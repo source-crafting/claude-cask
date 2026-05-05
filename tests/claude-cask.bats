@@ -725,3 +725,48 @@ echo "/tmp/anywhere"; exit 0'
   [ "$status" -eq 1 ]
   [[ "$output" == *"failed to export signing key"* ]]
 }
+
+@test "claude-cask user.name local overrides global" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+# 3-arg form (no --global): git's natural precedence — local wins.
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Local User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'local@example.com'; exit 0; fi
+# Signing keys still queried with --global.
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo ''; exit 1; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e GIT_AUTHOR_NAME=Local User" "$STUB_LOG"
+  grep -q "docker run.* -e GIT_AUTHOR_EMAIL=local@example.com" "$STUB_LOG"
+}
+
+@test "claude-cask user.email local overrides global" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'override@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo ''; exit 1; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e GIT_AUTHOR_EMAIL=override@example.com" "$STUB_LOG"
+}
