@@ -65,6 +65,44 @@ Dockerfile or entrypoint.sh, pass --rebuild (or run
 EOF
 }
 
+# --- Subcommand dispatch (extras) --------------------------------------------
+# install/remove/list are standalone actions: they perform their work and
+# exit without launching the Claude TUI. Detected by the FIRST positional
+# token only; `claude-cask -- install` still passes the literal word
+# through to claude.
+EXTRAS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-cask"
+
+extras_list() {
+  local any=0 eco
+  for eco in apt npm pip cargo; do
+    local f="$EXTRAS_DIR/${eco}.list"
+    if [[ -s "$f" ]]; then
+      any=1
+      echo "[$eco]"
+      grep -v '^#' "$f" | grep -v '^[[:space:]]*$' || true
+      echo
+    fi
+  done
+  if [[ $any -eq 0 ]]; then
+    echo "(no extras configured)"
+  fi
+}
+
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    list)
+      shift
+      [[ $# -eq 0 ]] || { echo "claude-cask: 'list' takes no arguments" >&2; exit 2; }
+      extras_list
+      exit 0
+      ;;
+    install|remove)
+      echo "claude-cask: '$1' not yet implemented" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)           MODEL="$2"; shift 2 ;;
