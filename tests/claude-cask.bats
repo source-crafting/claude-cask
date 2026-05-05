@@ -77,9 +77,12 @@ exit 0'
 
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
+# user.name and user.email reads no longer use --global (3-word args).
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
 case "$1 $2 $3 $4" in
-  "config --global --get user.name")       echo "Test User"; exit 0 ;;
-  "config --global --get user.email")      echo "test@example.com"; exit 0 ;;
   "config --global --get user.signingkey") echo ""; exit 1 ;;
   "config --global --get commit.gpgsign")  echo "false"; exit 0 ;;
 esac
@@ -167,8 +170,8 @@ exit 0'
   launcher_default_stubs
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
-if [[ "$1 $2 $3 $4" == "config --global --get user.name" ]]; then echo ""; exit 1; fi
-if [[ "$1 $2 $3 $4" == "config --global --get user.email" ]]; then echo "test@example.com"; exit 0; fi
+if [[ "$1 $2 $3" == "config --get user.name" ]]; then echo ""; exit 1; fi
+if [[ "$1 $2 $3" == "config --get user.email" ]]; then echo "test@example.com"; exit 0; fi
 exit 0'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
@@ -180,8 +183,8 @@ exit 0'
   launcher_default_stubs
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
-if [[ "$1 $2 $3 $4" == "config --global --get user.name" ]]; then echo "Test User"; exit 0; fi
-if [[ "$1 $2 $3 $4" == "config --global --get user.email" ]]; then echo ""; exit 1; fi
+if [[ "$1 $2 $3" == "config --get user.name" ]]; then echo "Test User"; exit 0; fi
+if [[ "$1 $2 $3" == "config --get user.email" ]]; then echo ""; exit 1; fi
 exit 0'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
@@ -203,8 +206,8 @@ exit 0'
 
   stub_set git "#!/usr/bin/env bash
 echo \"git \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'ABCDEF1234567890'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'true'; exit 0; fi
 exit 0"
@@ -236,8 +239,8 @@ exit 0"
 echo "docker $@" >> "$STUB_LOG"; exit 0'
 
   stub_set git "#!/usr/bin/env bash
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'ABCDEF1234567890'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'true'; exit 0; fi
 exit 0"
@@ -710,8 +713,8 @@ exit 0"
 echo "docker $@" >> "$STUB_LOG"; exit 0'
 
   stub_set git "#!/usr/bin/env bash
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'NOSUCHKEY'; exit 0; fi
 exit 0"
 
