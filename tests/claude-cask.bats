@@ -77,9 +77,12 @@ exit 0'
 
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
+# user.name and user.email reads no longer use --global (3-word args).
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
 case "$1 $2 $3 $4" in
-  "config --global --get user.name")       echo "Test User"; exit 0 ;;
-  "config --global --get user.email")      echo "test@example.com"; exit 0 ;;
   "config --global --get user.signingkey") echo ""; exit 1 ;;
   "config --global --get commit.gpgsign")  echo "false"; exit 0 ;;
 esac
@@ -167,8 +170,8 @@ exit 0'
   launcher_default_stubs
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
-if [[ "$1 $2 $3 $4" == "config --global --get user.name" ]]; then echo ""; exit 1; fi
-if [[ "$1 $2 $3 $4" == "config --global --get user.email" ]]; then echo "test@example.com"; exit 0; fi
+if [[ "$1 $2 $3" == "config --get user.name" ]]; then echo ""; exit 1; fi
+if [[ "$1 $2 $3" == "config --get user.email" ]]; then echo "test@example.com"; exit 0; fi
 exit 0'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
@@ -180,8 +183,8 @@ exit 0'
   launcher_default_stubs
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
-if [[ "$1 $2 $3 $4" == "config --global --get user.name" ]]; then echo "Test User"; exit 0; fi
-if [[ "$1 $2 $3 $4" == "config --global --get user.email" ]]; then echo ""; exit 1; fi
+if [[ "$1 $2 $3" == "config --get user.name" ]]; then echo "Test User"; exit 0; fi
+if [[ "$1 $2 $3" == "config --get user.email" ]]; then echo ""; exit 1; fi
 exit 0'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
@@ -203,8 +206,8 @@ exit 0'
 
   stub_set git "#!/usr/bin/env bash
 echo \"git \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'ABCDEF1234567890'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'true'; exit 0; fi
 exit 0"
@@ -236,8 +239,8 @@ exit 0"
 echo "docker $@" >> "$STUB_LOG"; exit 0'
 
   stub_set git "#!/usr/bin/env bash
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'ABCDEF1234567890'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'true'; exit 0; fi
 exit 0"
@@ -710,8 +713,8 @@ exit 0"
 echo "docker $@" >> "$STUB_LOG"; exit 0'
 
   stub_set git "#!/usr/bin/env bash
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.name\" ]]; then echo 'Test User'; exit 0; fi
-if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
 if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'NOSUCHKEY'; exit 0; fi
 exit 0"
 
@@ -724,4 +727,86 @@ echo "/tmp/anywhere"; exit 0'
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 1 ]
   [[ "$output" == *"failed to export signing key"* ]]
+}
+
+@test "claude-cask user.name local overrides global" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+# 3-arg form (no --global): git's natural precedence — local wins.
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Local User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'local@example.com'; exit 0; fi
+# Signing keys still queried with --global.
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo ''; exit 1; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e GIT_AUTHOR_NAME=Local User" "$STUB_LOG"
+  grep -q "docker run.* -e GIT_AUTHOR_EMAIL=local@example.com" "$STUB_LOG"
+}
+
+@test "claude-cask user.email local overrides global" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'override@example.com'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo ''; exit 1; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e GIT_AUTHOR_EMAIL=override@example.com" "$STUB_LOG"
+}
+
+@test "claude-cask user.signingkey local override is ignored" {
+  stub_set docker '#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+case "$1" in
+  image) [[ "$2" == "inspect" ]] && exit 0 ;;
+esac
+exit 0'
+
+  AGENT_SOCK="$(mktemp -u)"
+  python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])" "$AGENT_SOCK"
+  stub_set gpgconf "#!/usr/bin/env bash
+[[ \"\$1\" == '--list-dirs' && \"\$2\" == 'agent-extra-socket' ]] && echo '$AGENT_SOCK'
+exit 0"
+  stub_set gpg '#!/usr/bin/env bash
+case "$1 $2" in
+  "--export --armor") echo "FAKE PUBLIC KEY" ;;
+esac
+exit 0'
+
+  stub_set git "#!/usr/bin/env bash
+echo \"git \$@\" >> \"\$STUB_LOG\"
+if [[ \"\$1 \$2 \$3\" == \"config --get user.name\" ]]; then echo 'Test User'; exit 0; fi
+if [[ \"\$1 \$2 \$3\" == \"config --get user.email\" ]]; then echo 'test@example.com'; exit 0; fi
+# Local repo claims signingkey LOCALKEY, global has GLOBALKEY.
+if [[ \"\$1 \$2 \$3\" == \"config --get user.signingkey\" ]]; then echo 'LOCALKEY'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get user.signingkey\" ]]; then echo 'GLOBALKEY'; exit 0; fi
+if [[ \"\$1 \$2 \$3 \$4\" == \"config --global --get commit.gpgsign\" ]]; then echo 'false'; exit 0; fi
+exit 0"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e CLAUDE_CASK_SIGNING_KEY=GLOBALKEY" "$STUB_LOG"
+  ! grep -q "CLAUDE_CASK_SIGNING_KEY=LOCALKEY" "$STUB_LOG"
+
+  rm -f "$AGENT_SOCK"
 }

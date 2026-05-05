@@ -88,8 +88,11 @@ HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
 [[ "$HOST_UID" -eq 0 ]] && { echo "claude-cask: refusing to run as root (UID 0)" >&2; exit 1; }
 
-GIT_NAME="$(git config --global --get user.name  || true)"
-GIT_EMAIL="$(git config --global --get user.email || true)"
+# user.name and user.email follow git's normal precedence (local repo
+# config wins over global). user.signingkey and commit.gpgsign below stay
+# --global on purpose — see README "Git identity precedence".
+GIT_NAME="$(git config --get user.name  || true)"
+GIT_EMAIL="$(git config --get user.email || true)"
 SIGNING_KEY="$(git config --global --get user.signingkey || true)"
 GPG_SIGN="$(git config --global --get commit.gpgsign || echo false)"
 

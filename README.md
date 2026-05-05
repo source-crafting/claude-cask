@@ -5,8 +5,8 @@ Run Claude Code inside an ephemeral Docker container with the host working direc
 ## Requirements
 
 - macOS (Docker Desktop) or Linux with a working Docker daemon
-- `git` configured globally with at least `user.name` and `user.email`
-- For signed commits: `user.signingkey` set and `gpg-agent` running. On macOS Docker Desktop, file sharing must include `~/.gnupg`.
+- `git` configured with at least `user.name` and `user.email` (local repo config overrides global — see *Git identity precedence* below)
+- For signed commits: `user.signingkey` set **globally** and `gpg-agent` running. On macOS Docker Desktop, file sharing must include `~/.gnupg`.
 
 ## Install
 
@@ -96,6 +96,14 @@ The container runs as a non-root user `claude-cask` whose **UID/GID match the ho
 The entrypoint runs briefly as root to chown the bind-mounted gpg-agent socket and symlink it into `~claude-cask/.gnupg/` (see *GPG security model* below), then drops privileges to `claude-cask` via `gosu` and re-execs itself. By the time `claude` actually starts, the process is `claude-cask` at the host UID. No long-running root process remains in the container.
 
 This means bind-mounted files are owned by the same UID inside the container as on the host, both on Docker Desktop / macOS (where virtiofs would translate anyway) and on native Linux (where it's the only thing that makes the bind-mounts writable). The launcher refuses to run as host UID 0 (root).
+
+## Git identity precedence
+
+`user.name` and `user.email` follow git's normal precedence inside the launched workspace: a value set in the local repo config (`git config --local user.email work@example.com`) overrides the global value. Use this to commit as different identities in different repos without changing global config.
+
+`user.signingkey` and `commit.gpgsign` are read **only from your global config**. The driving reason is `user.signingkey`: the launcher exports exactly that key from your host keyring and bind-mounts it read-only, and a per-repo file steering which host key gets exported is a footgun the launcher chooses not to expose. `commit.gpgsign` rides along with the same global-only treatment for consistency, so signing policy is set in one place.
+
+If you need a different signing key for a specific project, change your global `user.signingkey` before launching.
 
 ## GPG security model
 
