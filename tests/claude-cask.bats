@@ -6,6 +6,11 @@ setup() {
   stub_init
   HOME="$(mktemp -d)"
   export HOME
+  # Detach stdin from any inherited tty so the launcher's pre-flight
+  # `Continue? [Y/n]` prompt (gated on `[[ -t 0 ]]`) doesn't hang the
+  # suite when bats itself was invoked interactively. Subprocesses
+  # spawned by `run` inherit this disconnected stdin.
+  exec </dev/null
 }
 
 teardown() {
@@ -147,7 +152,8 @@ exit 0'
 
 @test "claude-cask skips pre-flight prompt when stdin is not a tty" {
   launcher_default_stubs
-  # bats run does not allocate a tty, so [[ -t 0 ]] is false → no prompt.
+  # setup() exec's </dev/null, so the spawned bash sees stdin as a regular
+  # file (not a tty) and the [[ -t 0 ]] prompt gate is false → no prompt.
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
   [[ "$output" != *"Continue?"* ]]
@@ -386,7 +392,8 @@ echo "Linux"'
   launcher_default_stubs
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run --rm" "$STUB_LOG"
+  # Launcher composes `docker run -it --rm …` so allow flags between.
+  grep -q "docker run.* --rm" "$STUB_LOG"
   ! grep -q "docker run.* --cidfile" "$STUB_LOG"
 }
 
@@ -432,32 +439,18 @@ exit 0"
   grep -q "docker run.*--not-a-real-flag value" "$STUB_LOG"
 }
 
-@test "claude-cask mounts ~/.claude/settings.json read-only when present" {
+@test "claude-cask does not RO-mount settings.json or any of plugins/" {
+  # ~/.claude is mounted RW so Claude can manage its own state inside the
+  # container (install plugins, refresh marketplaces, update enabledPlugins
+  # in settings.json). No RO overlays are layered on top of those paths.
   launcher_default_stubs
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME/.claude/plugins/cache"
   echo "{}" > "$HOME/.claude/settings.json"
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  grep -q "docker run.*-v $HOME/.claude/settings.json:/home/claude-cask/.claude/settings.json:ro" "$STUB_LOG"
-}
-
-@test "claude-cask mounts ~/.claude/plugins read-only when present" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude/plugins"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  grep -q "docker run.*-v $HOME/.claude/plugins:/home/claude-cask/.claude/plugins:ro" "$STUB_LOG"
-}
-
-@test "claude-cask omits settings.json/plugins RO mounts when absent" {
-  launcher_default_stubs
-  # HOME is fresh tmp; neither path exists.
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
   ! grep -q "settings.json:.*:ro" "$STUB_LOG"
-  ! grep -q "plugins:.*:ro" "$STUB_LOG"
+  ! grep -q "plugins.*:ro" "$STUB_LOG"
 }
 
 @test "claude-cask mirrors PWD at the same in-container path (no /workspace collision)" {
@@ -807,4 +800,67 @@ exit 0"
   grep -q "docker run.* -e CLAUDE_CASK_SIGNING_KEY=LOCALKEY" "$STUB_LOG"
 
   rm -f "$AGENT_SOCK"
+}
+
+@test "claude-cask forwards HOST_HOME so plugin paths resolve in container" {
+  launcher_default_stubs
+  HOME="/Users/testuser"
+  export HOME
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* -e HOST_HOME=/Users/testuser" "$STUB_LOG"
+}
+
+@test "entrypoint creates HOST_HOME symlink to /home/claude-cask" {
+  # Run the entrypoint's root-side setup in a sandbox: redirect mkdir/ln
+  # via stubs and confirm the right ln -sfn invocation is issued. The
+  # real entrypoint exec's gosu after the symlink, so we use a gosu stub
+  # that records and exits.
+  stub_set gosu '#!/usr/bin/env bash
+echo "gosu $@" >> "$STUB_LOG"
+exit 0'
+
+  # The entrypoint's privileged section only runs when EUID==0, but the
+  # tests run as a regular user. Point id at a stub that lies.
+  stub_set id '#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then echo 0; exit 0; fi
+exit 0'
+
+  # Capture mkdir + ln so we don't actually mutate the test host's FS.
+  stub_set mkdir '#!/usr/bin/env bash
+echo "mkdir $@" >> "$STUB_LOG"
+exit 0'
+  stub_set ln '#!/usr/bin/env bash
+echo "ln $@" >> "$STUB_LOG"
+exit 0'
+
+  HOST_HOME="/Users/testuser"
+  export HOST_HOME GIT_AUTHOR_NAME="Test User" GIT_AUTHOR_EMAIL="test@example.com"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh"
+
+  # We don't assert exit status — the entrypoint exec's gosu, which our
+  # stub turns into a no-op exit 0; we care that the symlink was issued.
+  grep -q "^mkdir -p /Users$" "$STUB_LOG"
+  grep -q "^ln -sfn /home/claude-cask /Users/testuser$" "$STUB_LOG"
+}
+
+@test "entrypoint skips HOST_HOME symlink when value matches container home" {
+  stub_set gosu '#!/usr/bin/env bash
+echo "gosu $@" >> "$STUB_LOG"
+exit 0'
+  stub_set id '#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then echo 0; exit 0; fi
+exit 0'
+  stub_set mkdir '#!/usr/bin/env bash
+echo "mkdir $@" >> "$STUB_LOG"
+exit 0'
+  stub_set ln '#!/usr/bin/env bash
+echo "ln $@" >> "$STUB_LOG"
+exit 0'
+
+  HOST_HOME="/home/claude-cask"
+  export HOST_HOME GIT_AUTHOR_NAME="Test User" GIT_AUTHOR_EMAIL="test@example.com"
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/entrypoint.sh"
+
+  ! grep -q "^ln -sfn /home/claude-cask /home/claude-cask" "$STUB_LOG"
 }
