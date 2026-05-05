@@ -236,3 +236,81 @@ exit 0'
   grep -q "^docker rmi claude-cask:user$" "$STUB_LOG"
   [ ! -s "$HOME/.config/claude-cask/apt.list" ]
 }
+
+@test "TUI launch uses :user when any manifest is non-empty and :user exists with a fresh hash" {
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  # Compute the SRC_HASH the launcher will derive from Dockerfile+entrypoint.sh
+  # so the stub can return it for the image-hash label (avoiding base rebuild).
+  ACTUAL_SRC_HASH="$(cat "$REPO_ROOT/Dockerfile" "$REPO_ROOT/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
+  ACTUAL_UID="$(id -u)"
+  ACTUAL_GID="$(id -g)"
+  export ACTUAL_SRC_HASH ACTUAL_UID ACTUAL_GID
+
+  # Compute the hash the launcher will compare against. Use stub docker in PATH
+  # so user_hash() sees the same base image ID as the launcher will.
+  # docker stub: pretend :latest and :user both exist; for :user, return
+  # the same hash render_user_dockerfile would compute.
+  cat > "$STUB_BIN/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $@" >> "$STUB_LOG"
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$3" == "--format" ]]; then
+    img="${*: -1}"  # last argument is the image name
+    fmt="$4"
+    case "$img" in
+      claude-cask:latest)
+        case "$fmt" in
+          *claude-cask.uid*)        echo "$ACTUAL_UID" ;;
+          *claude-cask.gid*)        echo "$ACTUAL_GID" ;;
+          *claude-cask.image-hash*) echo "$ACTUAL_SRC_HASH" ;;
+          *)                         echo "sha256:basebase" ;;
+        esac
+        ;;
+      claude-cask:user)
+        echo "$EXPECTED_USER_HASH"
+        ;;
+    esac
+    exit 0
+  fi
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$STUB_BIN/docker"
+
+  # Precompute the expected user hash with the stub in PATH so user_hash()
+  # sees sha256:basebase as the base image ID (same as the launcher will).
+  CLAUDE_CASK_SOURCE_ONLY=1 source "$REPO_ROOT/claude-cask"
+  EXPECTED_USER_HASH="$(PATH="$STUB_BIN:$PATH" user_hash)"
+  export EXPECTED_USER_HASH
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* claude-cask:user" "$STUB_LOG"
+  ! grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
+  # No rebuild — hash matched.
+  ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+}
+
+@test "TUI launch uses :latest when all manifests are empty" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
+  [ "$status" -eq 0 ]
+  grep -q "docker run.* claude-cask:latest" "$STUB_LOG"
+  ! grep -q "docker run.* claude-cask:user" "$STUB_LOG"
+}

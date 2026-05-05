@@ -442,6 +442,22 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker image prune -f --filter "label=claude-cask.uid" >/dev/null 2>&1 || true
 fi
 
+# --- :user image selection -------------------------------------------------
+# If any manifest is non-empty, run with :user. Rebuild if its label hash
+# is stale (manifests changed, or :latest was rebuilt under us).
+if ! manifests_all_empty && [[ "${BARE:-0}" -eq 0 ]]; then
+  want_hash="$(user_hash)"
+  user_label="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.user-hash" }}' claude-cask:user 2>/dev/null || true)"
+  if [[ "$user_label" != "$want_hash" ]]; then
+    echo "claude-cask: :user image stale or missing — rebuilding" >&2
+    if ! build_user_image; then
+      echo "claude-cask: docker build failed for claude-cask:user" >&2
+      exit 1
+    fi
+  fi
+  IMAGE="claude-cask:user"
+fi
+
 GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
