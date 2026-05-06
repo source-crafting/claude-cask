@@ -25,3 +25,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint launcher and entrypoint
         run: shellcheck claude-cask entrypoint.sh
+
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
