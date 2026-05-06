@@ -14,6 +14,17 @@ if [[ "$(id -u)" -eq 0 ]]; then
     install -d -m 700 -o claude-cask -g claude-cask /home/claude-cask/.gnupg
     chown claude-cask:claude-cask /run/host-gpg-agent
     ln -sfn /run/host-gpg-agent /home/claude-cask/.gnupg/S.gpg-agent
+    # Defense-in-depth: if the bridge ever stops responding (Docker
+    # Desktop's macOS unix-socket forwarder can go stale after host
+    # sleep / host gpg-agent restart), gpg's default behaviour is to
+    # autostart a local in-container agent — which has no private keys
+    # and would clobber the symlink, leaving signing permanently broken
+    # for the rest of the container's life. no-autostart makes a stale
+    # bridge a loud, recoverable failure ("can't connect to agent")
+    # instead of a silent permanent one.
+    printf 'no-autostart\n' > /home/claude-cask/.gnupg/gpg.conf
+    chown claude-cask:claude-cask /home/claude-cask/.gnupg/gpg.conf
+    chmod 600 /home/claude-cask/.gnupg/gpg.conf
   fi
 
   # Make the host home path resolve to the container user's home so that
