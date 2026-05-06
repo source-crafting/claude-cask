@@ -140,6 +140,17 @@ manifest_write_sorted() {
   mv "$tmp" "$f"
 }
 
+# Sort the args alphabetically and emit "a, b, c". Used by manifest_add /
+# manifest_remove for their `added: ...` / `removed: ...` summary lines.
+_join_sorted() {
+  local first=1 item
+  while IFS= read -r item; do
+    if (( first )); then printf '%s' "$item"; first=0
+    else                 printf ', %s' "$item"
+    fi
+  done < <(printf '%s\n' "$@" | sort)
+}
+
 manifest_add() {
   local eco="$1"; shift
   local existing=() added=() already=()
@@ -158,17 +169,9 @@ manifest_add() {
     fi
   done
   manifest_write_sorted "$eco" "${existing[@]+"${existing[@]}"}"
-  if [[ ${#added[@]} -gt 0 ]]; then
-    local sorted_added
-    sorted_added="$(printf '%s\n' "${added[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-    echo "added: $sorted_added"
-  fi
-  if [[ ${#already[@]} -gt 0 ]]; then
-    local sorted_already
-    sorted_already="$(printf '%s\n' "${already[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-    echo "already: $sorted_already"
-  fi
-  [[ ${#added[@]} -gt 0 ]]
+  [[ ${#added[@]}   -gt 0 ]] && echo "added: $(_join_sorted "${added[@]}")"
+  [[ ${#already[@]} -gt 0 ]] && echo "already: $(_join_sorted "${already[@]}")"
+  [[ ${#added[@]}   -gt 0 ]]
 }
 
 manifest_remove() {
@@ -196,17 +199,9 @@ manifest_remove() {
     [[ $drop -eq 0 ]] && keep+=("$e")
   done
   manifest_write_sorted "$eco" "${keep[@]+"${keep[@]}"}"
-  if [[ ${#removed[@]} -gt 0 ]]; then
-    local sorted_removed
-    sorted_removed="$(printf '%s\n' "${removed[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-    echo "removed: $sorted_removed"
-  fi
-  if [[ ${#not_present[@]} -gt 0 ]]; then
-    local sorted_not_present
-    sorted_not_present="$(printf '%s\n' "${not_present[@]}" | sort | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-    echo "not_present: $sorted_not_present"
-  fi
-  [[ ${#removed[@]} -gt 0 ]]
+  [[ ${#removed[@]}     -gt 0 ]] && echo "removed: $(_join_sorted "${removed[@]}")"
+  [[ ${#not_present[@]} -gt 0 ]] && echo "not_present: $(_join_sorted "${not_present[@]}")"
+  [[ ${#removed[@]}     -gt 0 ]]
 }
 
 manifests_all_empty() {
@@ -332,8 +327,14 @@ extras_remove() {
     return 0
   fi
   if manifests_all_empty; then
-    docker rmi claude-cask:user >/dev/null 2>&1 || true
-    echo "claude-cask: all manifests empty; claude-cask:user untagged"
+    if ! docker image inspect claude-cask:user >/dev/null 2>&1; then
+      echo "claude-cask: all manifests empty; claude-cask:user already absent"
+    elif docker rmi claude-cask:user >/dev/null 2>&1; then
+      echo "claude-cask: all manifests empty; claude-cask:user untagged"
+    else
+      echo "claude-cask: all manifests empty, but claude-cask:user removal failed (in use?)" >&2
+      exit 1
+    fi
     return 0
   fi
   if ! build_user_image; then
@@ -345,6 +346,10 @@ extras_remove() {
 }
 
 render_user_dockerfile() {
+  # Flatten newline-separated manifest lines into space-separated tokens
+  # so they slot into the apt/npm/pip/cargo command lines below. apt, npm,
+  # pip and cargo package names cannot contain whitespace, so this is a
+  # safe shape change — not just a convenience.
   local apt_pkgs npm_pkgs pip_pkgs cargo_pkgs
   apt_pkgs="$(manifest_read apt | tr '\n' ' ')"
   npm_pkgs="$(manifest_read npm | tr '\n' ' ')"

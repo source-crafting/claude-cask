@@ -570,3 +570,81 @@ exit 0'
   [ "$status" -eq 0 ]
   [ ! -d "$HOME/.config/claude-cask/.lock" ]
 }
+
+@test "--update-claude-code aborts when 'npm view' exits non-zero" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set npm '#!/usr/bin/env bash
+echo "npm $*" >> "$STUB_LOG"
+exit 1'
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "failed to resolve claude-code version"
+  ! grep -q "^docker build" "$STUB_LOG"
+}
+
+@test "--update-claude-code aborts when 'npm view' returns empty" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set npm '#!/usr/bin/env bash
+echo "npm $*" >> "$STUB_LOG"
+exit 0'
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "failed to resolve claude-code version"
+  ! grep -q "^docker build" "$STUB_LOG"
+}
+
+@test "--update-claude-code aborts when npm is not on PATH" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  # Empty PATH so the launcher can't find npm. The git/docker stubs are
+  # invoked via $STUB_BIN, so we keep that on PATH.
+  PATH="$STUB_BIN" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "requires npm on host PATH"
+  ! grep -q "^docker build" "$STUB_LOG"
+}
+
+@test "remove of last package emits 'already absent' when :user image is missing" {
+  # docker stub that says image inspect MISSES for claude-cask:user but
+  # otherwise behaves normally.
+  stub_set docker '#!/usr/bin/env bash
+{ printf "docker"; printf " %s" "$@"; printf "\n"; } >> "$STUB_LOG"
+case "$1 $2 $3" in
+  "image inspect "*) [[ "$3" == "claude-cask:user" ]] && exit 1; exit 0 ;;
+esac
+exit 0'
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" remove --apt ripgrep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "claude-cask:user already absent"
+  ! grep -q "^docker rmi claude-cask:user" "$STUB_LOG"
+}
