@@ -419,6 +419,7 @@ user_hash() {
 }
 
 if [[ "${CLAUDE_CASK_SOURCE_ONLY:-0}" == "1" ]]; then
+  # shellcheck disable=SC2317  # exit 0 is reached when this file is executed (not sourced) and `return` fails
   return 0 2>/dev/null || exit 0
 fi
 
