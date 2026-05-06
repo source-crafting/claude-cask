@@ -238,13 +238,40 @@ parse_eco_flag() {
   esac
 }
 
-acquire_extras_lock() {
-  mkdir -p "$EXTRAS_DIR"
-  exec 9>"$EXTRAS_DIR/.lock"
-  if ! flock -n 9; then
-    echo "claude-cask: another install/remove/rebuild is in progress" >&2
-    exit 1
+EXTRAS_LOCK_HELD=0
+
+release_extras_lock() {
+  if [[ "$EXTRAS_LOCK_HELD" -eq 1 ]]; then
+    rm -rf "$EXTRAS_DIR/.lock" 2>/dev/null || true
+    EXTRAS_LOCK_HELD=0
   fi
+}
+
+acquire_extras_lock() {
+  # mkdir is atomic on POSIX, so we use a lock *directory* instead of
+  # `flock` (util-linux only — not present on macOS by default). The lock
+  # is released either by `release_extras_lock` via the EXIT trap below,
+  # or by `cleanup` for code paths that override the trap later. A PID
+  # file inside the dir lets us reclaim the lock when its previous holder
+  # crashed (kill -9, host reboot mid-build) without manual intervention.
+  mkdir -p "$EXTRAS_DIR"
+  # Drop any leftover regular file from the older flock-based launcher.
+  # Guard with `-f` because `rm -f` on a directory still errors (EISDIR);
+  # a real lock dir from a concurrent or crashed run is handled below.
+  [[ -f "$EXTRAS_DIR/.lock" ]] && rm -f "$EXTRAS_DIR/.lock"
+  while ! mkdir "$EXTRAS_DIR/.lock" 2>/dev/null; do
+    local holder=""
+    [[ -f "$EXTRAS_DIR/.lock/pid" ]] && holder="$(cat "$EXTRAS_DIR/.lock/pid" 2>/dev/null || true)"
+    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+      echo "claude-cask: another install/remove/rebuild is in progress (pid $holder)" >&2
+      exit 1
+    fi
+    echo "claude-cask: removing stale lock (holder pid ${holder:-?} no longer running)" >&2
+    rm -rf "$EXTRAS_DIR/.lock"
+  done
+  echo "$$" > "$EXTRAS_DIR/.lock/pid"
+  EXTRAS_LOCK_HELD=1
+  trap release_extras_lock EXIT
 }
 
 build_user_image() {
@@ -525,6 +552,7 @@ cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"
   fi
+  release_extras_lock
   return 0
 }
 trap cleanup EXIT

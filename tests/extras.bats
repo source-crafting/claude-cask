@@ -508,3 +508,65 @@ exit 0'
   echo "$output" | grep -q "already: ripgrep"
   ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
 }
+
+@test "extras lock blocks concurrent run when holder is alive" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  # Pre-acquire the lock with the bats process's own PID — guaranteed alive.
+  mkdir -p "$HOME/.config/claude-cask/.lock"
+  echo "$$" > "$HOME/.config/claude-cask/.lock/pid"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt jq
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "another install/remove/rebuild is in progress"
+  echo "$output" | grep -q "pid $$"
+  # Lock must still be held — the rejected run does not release it.
+  [ -d "$HOME/.config/claude-cask/.lock" ]
+  ! grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+}
+
+@test "extras lock reclaims stale lock when holder PID is dead" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  # Find a PID that is not in use. Walk down from the kernel-typical max
+  # to dodge bats's children at the low end. `kill -0` returns 0 if the
+  # PID is alive, non-zero (ESRCH) if not.
+  local dead_pid=4194302
+  while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid - 1)); done
+
+  mkdir -p "$HOME/.config/claude-cask/.lock"
+  echo "$dead_pid" > "$HOME/.config/claude-cask/.lock/pid"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt jq
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "removing stale lock"
+  grep -q "docker build -t claude-cask:user -" "$STUB_LOG"
+  # And the lock must be released after the successful run.
+  [ ! -d "$HOME/.config/claude-cask/.lock" ]
+}
+
+@test "extras lock is released after a successful install" {
+  stub_set docker "$(stub_docker_capture_stdin)"
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" install --apt jq
+  [ "$status" -eq 0 ]
+  [ ! -d "$HOME/.config/claude-cask/.lock" ]
+}
