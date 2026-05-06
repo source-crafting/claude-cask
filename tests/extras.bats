@@ -6,6 +6,12 @@ setup() {
   stub_init
   HOME="$(mktemp -d)"
   export HOME
+  # Pin XDG_CONFIG_HOME under the test's tmpdir HOME. Without this, a
+  # runner that exports XDG_CONFIG_HOME (some CI setups do) would route
+  # the launcher's $EXTRAS_DIR to the host's real config dir instead of
+  # the isolated tmpdir, breaking every manifest-touching test.
+  XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_CONFIG_HOME
   exec </dev/null
 }
 
@@ -616,9 +622,11 @@ case "$1 $2 $3" in
 esac
 exit 0'
 
-  # Empty PATH so the launcher can't find npm. The git/docker stubs are
-  # invoked via $STUB_BIN, so we keep that on PATH.
-  PATH="$STUB_BIN" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  # Empty PATH so the launcher can't find npm. We invoke bash via $BASH
+  # (absolute path) rather than the bare command name because PATH=$STUB_BIN
+  # would otherwise prevent `bats run` from finding bash itself, masking
+  # the launcher's intended "requires npm" error with a generic exit 127.
+  PATH="$STUB_BIN" run "$BASH" "$REPO_ROOT/claude-cask" --update-claude-code
   [ "$status" -ne 0 ]
   echo "$output" | grep -q "requires npm on host PATH"
   ! grep -q "^docker build" "$STUB_LOG"

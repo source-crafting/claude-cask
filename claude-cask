@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bail early if --update-claude-code was requested but npm is missing.
+# Done in pure bash (substring match + the `command` builtin) so the
+# check fires before any external tool runs. The launcher otherwise
+# shells out to `dirname`, `readlink`, `id`, etc. while initialising,
+# any of which would 127 first on a stripped PATH and mask the
+# intended "requires npm" error. Pad $* with spaces so the substring
+# match is word-anchored.
+if [[ " $* " == *' --update-claude-code '* ]]; then
+  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
+fi
+
 IMAGE="claude-cask:latest"
 
 # Resolve the script path through any symlinks before deriving SCRIPT_DIR.
@@ -234,7 +245,7 @@ manifest_restore() {
   local mode=""
   while IFS= read -r line; do
     case "$line" in
-      "==FILE=="*)   eco="${line#==FILE==}"; mode=file; buf="" ;;
+      "==FILE=="*)   eco="${line#==FILE==}"; mode="file"; buf="" ;;
       "==ABSENT=="*) eco="${line#==ABSENT==}"; rm -f "$(manifest_path "$eco")"; mode="" ;;
       "==END==")     printf '%s' "$buf" > "$(manifest_path "$eco")"; mode="" ;;
       *)             [[ "$mode" == file ]] && buf+="$line"$'\n' ;;
@@ -419,6 +430,7 @@ user_hash() {
 }
 
 if [[ "${CLAUDE_CASK_SOURCE_ONLY:-0}" == "1" ]]; then
+  # shellcheck disable=SC2317  # exit 0 is reached when this file is executed (not sourced) and `return` fails
   return 0 2>/dev/null || exit 0
 fi
 
@@ -485,8 +497,9 @@ GPG_SIGN="$(git config --get commit.gpgsign || echo false)"
 SRC_HASH="$(cat "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
 
 if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
-  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
-  cc_version="$(npm view @anthropic-ai/claude-code version)"
+  # `|| true` so a non-zero exit from `npm view` doesn't fire `set -e`
+  # before our empty-check below has a chance to print the friendly error.
+  cc_version="$(npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
   [[ -n "$cc_version" ]] || { echo "claude-cask: failed to resolve claude-code version via npm view" >&2; exit 1; }
   acquire_extras_lock
   docker build \
@@ -572,7 +585,7 @@ GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
 
-# shellcheck disable=SC2329  # invoked via trap
+# shellcheck disable=SC2329,SC2317  # invoked via trap; older shellcheck versions don't follow trap registrations and flag the body as unreachable
 cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"

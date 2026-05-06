@@ -160,6 +160,15 @@ exit 0'
 }
 
 @test "claude-cask exits 1 when docker is missing" {
+  # On environments where docker is installed at /usr/bin/docker (most CI
+  # runners, including GitHub Actions' ubuntu-latest), we can't simulate
+  # "no docker" without also losing the system tools the launcher needs
+  # (id, cat, shasum, cut, dirname, readlink) which all live at the same
+  # prefix. Skip when docker is in /usr/bin; macOS devs typically have
+  # docker under /usr/local or /Applications, so this still exercises the
+  # launcher's missing-docker branch locally.
+  [[ -x /usr/bin/docker ]] && skip "system has /usr/bin/docker; cannot simulate missing-docker without losing system tools"
+
   stub_set git '#!/usr/bin/env bash
 echo "git $@" >> "$STUB_LOG"
 exit 0'
@@ -411,15 +420,19 @@ exit 0"
 }
 
 @test "claude-cask aborts cleanly on a circular launcher symlink" {
-  launcher_default_stubs
+  # Test the symlink-resolver function directly. Invoking the launcher via
+  # `bash $LINK_DIR/A` cannot work portably: on Linux, the kernel detects
+  # the symlink cycle at open(2) time and returns ELOOP before bash ever
+  # runs the script — our hop-counter never gets a chance. Sourcing the
+  # launcher with CLAUDE_CASK_SOURCE_ONLY=1 exposes the function so we can
+  # test the actual logic that protects against cycles.
+  CLAUDE_CASK_SOURCE_ONLY=1 source "$REPO_ROOT/claude-cask"
 
-  # Build A → B → A. Invoking through either should error within the hop
-  # limit rather than infinite-looping.
   LINK_DIR="$(mktemp -d)"
   ln -s "$LINK_DIR/B" "$LINK_DIR/A"
   ln -s "$LINK_DIR/A" "$LINK_DIR/B"
 
-  PATH="$STUB_BIN:$PATH" run bash "$LINK_DIR/A"
+  run __cc_resolve_symlink "$LINK_DIR/A"
   [ "$status" -ne 0 ]
   [[ "$output" == *"too many symlink hops"* ]]
 
