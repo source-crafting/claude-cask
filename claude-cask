@@ -480,14 +480,23 @@ GPG_SIGN="$(git config --get commit.gpgsign || echo false)"
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
 
+# If --update-claude-code was requested, bail early when npm is missing
+# from PATH. The SRC_HASH calc below would otherwise fail with exit 127
+# (cat/shasum/cut not found) instead of the intended "requires npm" error
+# whenever the caller's PATH excludes system tools.
+if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
+  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
+fi
+
 # Hash the contents of the build context (per .dockerignore: Dockerfile +
 # entrypoint.sh). If the hash recorded in the existing image's label
 # doesn't match what's on disk now, the image is stale and we rebuild.
 SRC_HASH="$(cat "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
 
 if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
-  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
-  cc_version="$(npm view @anthropic-ai/claude-code version)"
+  # `|| true` so a non-zero exit from `npm view` doesn't fire `set -e`
+  # before our empty-check below has a chance to print the friendly error.
+  cc_version="$(npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
   [[ -n "$cc_version" ]] || { echo "claude-cask: failed to resolve claude-code version via npm view" >&2; exit 1; }
   acquire_extras_lock
   docker build \
