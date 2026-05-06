@@ -573,7 +573,7 @@ GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
 
-# shellcheck disable=SC2329  # invoked via trap
+# shellcheck disable=SC2329,SC2317  # invoked via trap; older shellcheck versions don't follow trap registrations and flag the body as unreachable
 cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"
