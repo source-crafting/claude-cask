@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bail early if --update-claude-code was requested but npm is missing.
+# Done in pure bash (substring match + the `command` builtin) so the
+# check fires before any external tool runs. The launcher otherwise
+# shells out to `dirname`, `readlink`, `id`, etc. while initialising,
+# any of which would 127 first on a stripped PATH and mask the
+# intended "requires npm" error. Pad $* with spaces so the substring
+# match is word-anchored.
+if [[ " $* " == *' --update-claude-code '* ]]; then
+  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
+fi
+
 IMAGE="claude-cask:latest"
 
 # Resolve the script path through any symlinks before deriving SCRIPT_DIR.
@@ -458,15 +469,6 @@ while [[ $# -gt 0 ]]; do
     *)                 EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
-
-# If --update-claude-code was requested, bail early when npm is missing
-# from PATH. Every other check below this point shells out to system
-# tools (id, git, cat, shasum, cut) that may be deliberately stripped
-# from $PATH in tests; running the npm guard first ensures we surface
-# the intended "requires npm" error rather than a generic 127.
-if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
-  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
-fi
 
 command -v docker >/dev/null 2>&1 || { echo "claude-cask: docker not found in PATH" >&2; exit 1; }
 
