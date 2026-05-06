@@ -14,7 +14,7 @@ Inside the container, Claude can read and write:
 It cannot reach:
 
 - Anything else on your host filesystem (no `~`, no `/`, no other repos)
-- The macOS keychain (the OAuth token is forwarded as a file mirror, not direct keychain access)
+- The macOS keychain (the in-container Claude has its own OAuth session, written to `~/.claude/.credentials.json` on first `/login`; it never reads the keychain)
 - Other private GPG keys in your keyring (only the configured signing key's public half is imported)
 - Other users on the host
 - Any host process
@@ -70,9 +70,11 @@ These are claude-cask-specific protections that don't exist when you run Claude 
 
 ## Credentials on disk (macOS)
 
-On macOS, Claude Code stores its OAuth token in the Keychain. The Linux Claude inside the container reads from `~/.claude/.credentials.json`. The launcher writes that file from your keychain **the first time it doesn't exist**, then leaves it alone forever — claude-cask is a consumer of the credentials store, not its owner. Deleting it on exit would break any other Claude session reading the same file (host claude on Linux, another claude-cask container, even host claude on macOS if it has been pointed at it).
+The in-container Linux Claude reads its OAuth token from `~/.claude/.credentials.json` on the host. On the first launch (when the file doesn't exist yet), `/login` inside the container runs the OAuth flow and writes the file via the bind mount; subsequent launches reuse it. The launcher itself never reads the keychain and never writes credentials — it just mounts whatever is at that path.
 
-So the file persists on disk indefinitely once staged. What that exposure actually looks like on a typical macOS dev box:
+On macOS, this means the in-container session is a separate OAuth session from host `claude` (which authenticates against the Keychain). Each side refreshes its own tokens; the file and the keychain are independent. The file is not deleted on exit — doing so would log out concurrent claude sessions reading it.
+
+So the file persists on disk indefinitely once written. What that exposure actually looks like on a typical macOS dev box:
 
 - **FileVault on (default on modern Macs).** Disk is encrypted at rest. Stolen laptop or stolen disk → the credentials file is unreadable without your login password. Keychain is also protected by your login password, so the file's protection at rest is comparable to the keychain's. *(The launcher's pre-flight summary surfaces FileVault state every run on macOS, with a clear warning when it's off.)*
 - **Time Machine to an encrypted destination.** Backups are encrypted; the file in the backup is no easier to read than on the live disk.
@@ -81,7 +83,7 @@ So the file persists on disk indefinitely once staged. What that exposure actual
 
 If you suspect a leak: revoke the OAuth token from your Anthropic account settings. The blast radius of a compromised token is "API quota burn + recent session history," recoverable in minutes.
 
-If you want to force a refresh from the keychain (e.g., you've re-logged-in on the host): `rm ~/.claude/.credentials.json` and the next claude-cask launch will re-stage from the keychain.
+If you want to force a fresh login inside the container: `rm ~/.claude/.credentials.json` and run `/login` on the next claude-cask launch.
 
 ## Operational guidance
 

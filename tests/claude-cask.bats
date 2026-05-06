@@ -275,79 +275,22 @@ echo "claude called" >> "$STUB_LOG"'
   ! grep -q "^claude called" "$STUB_LOG"
 }
 
-@test "claude-cask stages keychain credentials into ~/.claude/.credentials.json and leaves the file in place" {
+@test "claude-cask never reads the keychain on macOS hosts" {
+  # The launcher relies on Claude Code's own /login flow to write
+  # ~/.claude/.credentials.json on first launch (same path as Linux).
+  # It must not call `security find-generic-password` on any platform.
   launcher_default_stubs
   mkdir -p "$HOME/.claude"
-
-  stub_set uname '#!/usr/bin/env bash
-echo "Darwin"'
-
-  CREDS_PAYLOAD='{"claudeAiOauth":{"accessToken":"FAKE"}}'
-  stub_set security "#!/usr/bin/env bash
-echo \"security \$@\" >> \"\$STUB_LOG\"
-if [[ \"\$1\" == \"find-generic-password\" ]]; then
-  echo '$CREDS_PAYLOAD'
-  exit 0
-fi
-exit 1"
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  grep -q "security find-generic-password -s Claude Code-credentials" "$STUB_LOG"
-  # The file is staged and *kept* — the launcher is a consumer of the
-  # credentials store, not its owner; deleting it would break concurrent
-  # sessions on the same host.
-  [ -f "$HOME/.claude/.credentials.json" ]
-  grep -q "$CREDS_PAYLOAD" "$HOME/.claude/.credentials.json"
-  # No separate file-level bind-mount needed (the credentials live inside the
-  # bind-mounted ~/.claude directory).
-  ! grep -q "docker run.*-v.*:/home/claude-cask/.claude/.credentials.json" "$STUB_LOG"
-}
-
-@test "claude-cask leaves any pre-existing host credentials file alone" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude"
-  echo "PRE-EXISTING-CONTENT" > "$HOME/.claude/.credentials.json"
 
   stub_set uname '#!/usr/bin/env bash
 echo "Darwin"'
   stub_set security '#!/usr/bin/env bash
 echo "security $@" >> "$STUB_LOG"
-if [[ "$1" == "find-generic-password" ]]; then echo "{}"; exit 0; fi
-exit 1'
+exit 0'
 
   PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
   [ "$status" -eq 0 ]
-  # The pre-existing file is preserved untouched, *and* security was never
-  # called because the file was already there.
-  grep -q "PRE-EXISTING-CONTENT" "$HOME/.claude/.credentials.json"
   ! grep -q "security find-generic-password" "$STUB_LOG"
-}
-
-@test "claude-cask does not stage credentials when keychain entry is absent" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude"
-
-  stub_set uname '#!/usr/bin/env bash
-echo "Darwin"'
-  stub_set security '#!/usr/bin/env bash
-echo "security $@" >> "$STUB_LOG"
-exit 44'
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
-  [ ! -f "$HOME/.claude/.credentials.json" ]
-}
-
-@test "claude-cask skips keychain extraction on non-Darwin hosts" {
-  launcher_default_stubs
-  mkdir -p "$HOME/.claude"
-
-  stub_set uname '#!/usr/bin/env bash
-echo "Linux"'
-
-  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask"
-  [ "$status" -eq 0 ]
   [ ! -f "$HOME/.claude/.credentials.json" ]
 }
 

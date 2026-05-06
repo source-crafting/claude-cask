@@ -683,32 +683,6 @@ fi
 # plugin install/uninstall and marketplace refresh to break inside the
 # container if you do, since both write to those paths.
 
-# On macOS, Claude Code stores its OAuth token in the Keychain rather than
-# in any file. The Linux Claude Code inside the container reads it from
-# ~/.claude/.credentials.json. The launcher writes that file from the
-# keychain only when it doesn't already exist on the host, then leaves it
-# alone for the rest of its life — claude-cask is a *consumer* of the
-# credentials store, not its owner. Deleting on exit would break any other
-# claude session reading the same file (host claude on Linux, another
-# container, even host claude on macOS if it's been written here).
-#
-# The file persists on disk indefinitely. With FileVault on (default on
-# modern Macs) and an encrypted Time Machine destination, this is roughly
-# equivalent in security to the keychain itself. See SECURITY.md.
-if [[ "$(uname -s)" == "Darwin" ]] && command -v security >/dev/null 2>&1; then
-  HOST_CREDS_FILE="$HOME/.claude/.credentials.json"
-  if [[ ! -e "$HOST_CREDS_FILE" ]]; then
-    if creds_json="$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null)" \
-         && [[ -n "$creds_json" ]]; then
-      mkdir -p "$HOME/.claude"
-      chmod 700 "$HOME/.claude"
-      umask_old="$(umask)"
-      umask 077
-      printf '%s' "$creds_json" > "$HOST_CREDS_FILE"
-      umask "$umask_old"
-    fi
-  fi
-fi
 if [[ ${#GPG_ENV[@]} -gt 0 ]]; then
   DOCKER_ARGS+=("${GPG_ENV[@]}")
 fi
@@ -756,9 +730,10 @@ DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
     joined="${joined%, }"
     echo "  extras:       $joined  ($IMAGE)"
   fi
-  # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
-  # the assumption that makes a persistent credentials file at rest roughly
-  # equivalent to the keychain. If it's off, the user should know.
+  # Surface FileVault state on macOS — ~/.claude/.credentials.json holds the
+  # OAuth token in plaintext on disk (written by Claude on first /login),
+  # so SECURITY.md treats "FileVault on" as the assumption that keeps it
+  # protected at rest. If it's off, the user should know.
   if [[ "$(uname -s)" == "Darwin" ]] && command -v fdesetup >/dev/null 2>&1; then
     fv_status="$(fdesetup status 2>/dev/null || true)"
     if [[ "$fv_status" == *"FileVault is On"* ]]; then
