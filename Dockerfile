@@ -45,6 +45,9 @@ LABEL claude-cask.image-hash="${IMAGE_HASH}"
 # owns it (e.g., the base image's `node` user at UID 1000), then create
 # claude-cask. Pre-create the home dotdirs that get bind-mounted into so
 # they exist as mountpoints owned by claude-cask before mounts are applied.
+# The pipes live inside `$(...)` whose results are gated by `[ -n "$existing_user" ]`
+# / `[ -n "$existing_group" ]` checks plus `|| true`, so an unset pipefail
+# cannot cause silent failures here.
 # hadolint ignore=DL4006
 RUN set -e \
  && existing_user="$(getent passwd "${USER_UID}" | cut -d: -f1)" \
