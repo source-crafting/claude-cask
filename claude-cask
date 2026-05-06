@@ -32,8 +32,11 @@ SCRIPT_DIR="$( cd "$( dirname "$(__cc_resolve_symlink "${BASH_SOURCE[0]}")" )" &
 MODEL="opus"
 AUTO_MODE=0
 REBUILD=0
+EXPLICIT_REBUILD=0
+UPDATE_CC=0
 KEEP_CONTAINER=0
 EXTRA_ARGS=()
+BARE=0
 
 usage() {
   cat <<'EOF'
@@ -42,19 +45,47 @@ claude-cask - run Claude Code inside a Docker container
 USAGE:
   claude-cask [--model NAME] [--auto] [--rebuild]
               [--keep-container] [-- <args passed to claude>]
+  claude-cask install --apt|--npm|--pip|--cargo PKG [PKG...]
+  claude-cask remove  --apt|--npm|--pip|--cargo PKG [PKG...]
+  claude-cask list
 
 OPTIONS:
   --model NAME      Model to use (default: opus)
   --auto            Enable auto mode (--permission-mode auto). Off by default;
                     use this only when you trust the AI to run tool calls
                     without per-action confirmation.
-  --rebuild         Force-rebuild the claude-cask:latest image before running
+  --rebuild         Force-rebuild claude-cask:latest (and claude-cask:user
+                    if any user-extras manifest is non-empty), then exit.
+                    Does NOT launch the Claude Code TUI.
+  --update-claude-code
+                    Resolve the latest claude-code on npm, rebuild
+                    claude-cask:latest with that version (busting the
+                    install layer cache), then rebuild claude-cask:user
+                    if any user-extras manifest is non-empty. Exits
+                    without launching the Claude Code TUI.
   --keep-container  Don't pass --rm to docker run. The container survives
                     after exit, so `docker logs <id>` and `docker inspect
                     <id>` are available for post-mortem debugging. The
                     launcher prints the container id and cleanup hints at
                     exit. You're responsible for `docker rm` when done.
+  --bare            Launch with claude-cask:latest even when user-extras
+                    manifests are populated (skips claude-cask:user).
   -h, --help        Show this help
+
+USER-EXTRAS SUBCOMMANDS:
+  install --<eco> PKG [PKG...]
+                    Add one or more packages to the <eco> manifest and
+                    rebuild claude-cask:user on top of :latest. Manifests
+                    persist under ~/.config/claude-cask/<eco>.list and
+                    are layered into the container at launch.
+  remove  --<eco> PKG [PKG...]
+                    Remove the named packages from the <eco> manifest and
+                    rebuild claude-cask:user. If all manifests become
+                    empty, claude-cask:user is untagged.
+  list              Print the current contents of every manifest, grouped
+                    by ecosystem. Exits non-zero only on an internal error.
+
+  Ecosystem flags: --apt | --npm | --pip | --cargo
 
 The current working directory is mounted at the same path inside the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
@@ -65,12 +96,361 @@ Dockerfile or entrypoint.sh, pass --rebuild (or run
 EOF
 }
 
+# --- Subcommand dispatch (extras) --------------------------------------------
+# install/remove/list are standalone actions: they perform their work and
+# exit without launching the Claude TUI. Detected by the FIRST positional
+# token only; `claude-cask -- install` still passes the literal word
+# through to claude.
+EXTRAS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-cask"
+
+extras_list() {
+  local any=0 eco
+  for eco in apt npm pip cargo; do
+    local f="$EXTRAS_DIR/${eco}.list"
+    if [[ -s "$f" ]]; then
+      any=1
+      echo "[$eco]"
+      grep -v '^#' "$f" | grep -v '^[[:space:]]*$' || true
+      echo
+    fi
+  done
+  if [[ $any -eq 0 ]]; then
+    echo "(no extras configured)"
+  fi
+}
+
+manifest_path() { echo "$EXTRAS_DIR/${1}.list"; }
+
+manifest_read() {
+  local f; f="$(manifest_path "$1")"
+  [[ -f "$f" ]] || return 0
+  grep -Ev '^([[:space:]]*$|#)' "$f" || true
+}
+
+manifest_write_sorted() {
+  local eco="$1"; shift
+  mkdir -p "$EXTRAS_DIR"
+  local f; f="$(manifest_path "$eco")"
+  local tmp="${f}.tmp.$$"
+  if [[ $# -eq 0 ]]; then
+    : > "$tmp"
+  else
+    printf '%s\n' "$@" | sort -u > "$tmp"
+  fi
+  mv "$tmp" "$f"
+}
+
+# Sort the args alphabetically and emit "a, b, c". Used by manifest_add /
+# manifest_remove for their `added: ...` / `removed: ...` summary lines.
+_join_sorted() {
+  local first=1 item
+  while IFS= read -r item; do
+    if (( first )); then printf '%s' "$item"; first=0
+    else                 printf ', %s' "$item"
+    fi
+  done < <(printf '%s\n' "$@" | sort)
+}
+
+manifest_add() {
+  local eco="$1"; shift
+  local existing=() added=() already=()
+  mapfile -t existing < <(manifest_read "$eco")
+  local pkg
+  for pkg in "$@"; do
+    local found=0 e
+    for e in "${existing[@]+"${existing[@]}"}"; do
+      [[ "$e" == "$pkg" ]] && { found=1; break; }
+    done
+    if [[ $found -eq 1 ]]; then
+      already+=("$pkg")
+    else
+      added+=("$pkg")
+      existing+=("$pkg")
+    fi
+  done
+  manifest_write_sorted "$eco" "${existing[@]+"${existing[@]}"}"
+  [[ ${#added[@]}   -gt 0 ]] && echo "added: $(_join_sorted "${added[@]}")"
+  [[ ${#already[@]} -gt 0 ]] && echo "already: $(_join_sorted "${already[@]}")"
+  [[ ${#added[@]}   -gt 0 ]]
+}
+
+manifest_remove() {
+  local eco="$1"; shift
+  local existing=() removed=() not_present=()
+  mapfile -t existing < <(manifest_read "$eco")
+  local pkg
+  for pkg in "$@"; do
+    local found=0 e
+    for e in "${existing[@]+"${existing[@]}"}"; do
+      [[ "$e" == "$pkg" ]] && { found=1; break; }
+    done
+    if [[ $found -eq 1 ]]; then
+      removed+=("$pkg")
+    else
+      not_present+=("$pkg")
+    fi
+  done
+  local keep=() e
+  for e in "${existing[@]+"${existing[@]}"}"; do
+    local drop=0 r
+    for r in "${removed[@]+"${removed[@]}"}"; do
+      [[ "$e" == "$r" ]] && { drop=1; break; }
+    done
+    [[ $drop -eq 0 ]] && keep+=("$e")
+  done
+  manifest_write_sorted "$eco" "${keep[@]+"${keep[@]}"}"
+  [[ ${#removed[@]}     -gt 0 ]] && echo "removed: $(_join_sorted "${removed[@]}")"
+  [[ ${#not_present[@]} -gt 0 ]] && echo "not_present: $(_join_sorted "${not_present[@]}")"
+  [[ ${#removed[@]}     -gt 0 ]]
+}
+
+manifests_all_empty() {
+  local eco
+  for eco in apt npm pip cargo; do
+    [[ -n "$(manifest_read "$eco")" ]] && return 1
+  done
+  return 0
+}
+
+manifest_snapshot() {
+  # Echoes a snapshot blob that manifest_restore can consume.
+  local eco f
+  for eco in apt npm pip cargo; do
+    f="$(manifest_path "$eco")"
+    if [[ -f "$f" ]]; then
+      echo "==FILE==$eco"
+      cat "$f"
+      echo "==END=="
+    else
+      echo "==ABSENT==$eco"
+    fi
+  done
+}
+
+manifest_restore() {
+  # Reads the blob from stdin and rewrites all four manifests.
+  mkdir -p "$EXTRAS_DIR"
+  local line eco buf=""
+  local mode=""
+  while IFS= read -r line; do
+    case "$line" in
+      "==FILE=="*)   eco="${line#==FILE==}"; mode=file; buf="" ;;
+      "==ABSENT=="*) eco="${line#==ABSENT==}"; rm -f "$(manifest_path "$eco")"; mode="" ;;
+      "==END==")     printf '%s' "$buf" > "$(manifest_path "$eco")"; mode="" ;;
+      *)             [[ "$mode" == file ]] && buf+="$line"$'\n' ;;
+    esac
+  done
+}
+
+parse_eco_flag() {
+  # On success, sets global ECO from --apt/--npm/--pip/--cargo.
+  # The CALLER is responsible for the matching shift after success.
+  case "${1:-}" in
+    --apt|--npm|--pip|--cargo) ECO="${1#--}"; return 0 ;;
+    *) echo "claude-cask: install/remove require an ecosystem flag (--apt|--npm|--pip|--cargo)" >&2; return 2 ;;
+  esac
+}
+
+EXTRAS_LOCK_HELD=0
+
+release_extras_lock() {
+  if [[ "$EXTRAS_LOCK_HELD" -eq 1 ]]; then
+    rm -rf "$EXTRAS_DIR/.lock" 2>/dev/null || true
+    EXTRAS_LOCK_HELD=0
+  fi
+}
+
+acquire_extras_lock() {
+  # mkdir is atomic on POSIX, so we use a lock *directory* instead of
+  # `flock` (util-linux only — not present on macOS by default). The lock
+  # is released either by `release_extras_lock` via the EXIT trap below,
+  # or by `cleanup` for code paths that override the trap later. A PID
+  # file inside the dir lets us reclaim the lock when its previous holder
+  # crashed (kill -9, host reboot mid-build) without manual intervention.
+  mkdir -p "$EXTRAS_DIR"
+  # Drop any leftover regular file from the older flock-based launcher.
+  # Guard with `-f` because `rm -f` on a directory still errors (EISDIR);
+  # a real lock dir from a concurrent or crashed run is handled below.
+  [[ -f "$EXTRAS_DIR/.lock" ]] && rm -f "$EXTRAS_DIR/.lock"
+  while ! mkdir "$EXTRAS_DIR/.lock" 2>/dev/null; do
+    local holder=""
+    [[ -f "$EXTRAS_DIR/.lock/pid" ]] && holder="$(cat "$EXTRAS_DIR/.lock/pid" 2>/dev/null || true)"
+    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+      echo "claude-cask: another install/remove/rebuild is in progress (pid $holder)" >&2
+      exit 1
+    fi
+    echo "claude-cask: removing stale lock (holder pid ${holder:-?} no longer running)" >&2
+    rm -rf "$EXTRAS_DIR/.lock"
+  done
+  echo "$$" > "$EXTRAS_DIR/.lock/pid"
+  EXTRAS_LOCK_HELD=1
+  trap release_extras_lock EXIT
+}
+
+build_user_image() {
+  # Reads the rendered Dockerfile on stdin. Returns docker's exit code.
+  render_user_dockerfile | docker build -t claude-cask:user -
+}
+
+extras_install() {
+  parse_eco_flag "$@" || exit $?
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "claude-cask: install --$ECO requires at least one package" >&2
+    exit 2
+  fi
+  acquire_extras_lock
+  local snap; snap="$(manifest_snapshot)"
+  if ! manifest_add "$ECO" "$@"; then
+    # All duplicates — nothing changed, no rebuild needed.
+    return 0
+  fi
+  if ! build_user_image; then
+    echo "claude-cask: docker build failed; rolling back $ECO manifest" >&2
+    printf '%s' "$snap" | manifest_restore
+    exit 1
+  fi
+  echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
+}
+
+extras_remove() {
+  parse_eco_flag "$@" || exit $?
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "claude-cask: remove --$ECO requires at least one package" >&2
+    exit 2
+  fi
+  acquire_extras_lock
+  local snap; snap="$(manifest_snapshot)"
+  if ! manifest_remove "$ECO" "$@"; then
+    # Nothing was actually present — exit 0, no rebuild.
+    return 0
+  fi
+  if manifests_all_empty; then
+    if ! docker image inspect claude-cask:user >/dev/null 2>&1; then
+      echo "claude-cask: all manifests empty; claude-cask:user already absent"
+    elif docker rmi claude-cask:user >/dev/null 2>&1; then
+      echo "claude-cask: all manifests empty; claude-cask:user untagged"
+    else
+      echo "claude-cask: all manifests empty, but claude-cask:user removal failed (in use?)" >&2
+      exit 1
+    fi
+    return 0
+  fi
+  if ! build_user_image; then
+    echo "claude-cask: docker build failed; rolling back $ECO manifest" >&2
+    printf '%s' "$snap" | manifest_restore
+    exit 1
+  fi
+  echo "claude-cask: $ECO manifest updated; claude-cask:user rebuilt"
+}
+
+render_user_dockerfile() {
+  # Flatten newline-separated manifest lines into space-separated tokens
+  # so they slot into the apt/npm/pip/cargo command lines below. apt, npm,
+  # pip and cargo package names cannot contain whitespace, so this is a
+  # safe shape change — not just a convenience.
+  local apt_pkgs npm_pkgs pip_pkgs cargo_pkgs
+  apt_pkgs="$(manifest_read apt | tr '\n' ' ')"
+  npm_pkgs="$(manifest_read npm | tr '\n' ' ')"
+  pip_pkgs="$(manifest_read pip | tr '\n' ' ')"
+  cargo_pkgs="$(manifest_read cargo | tr '\n' ' ')"
+
+  echo "FROM claude-cask:latest"
+  echo "USER root"
+
+  # Compose the apt RUN: user-listed apt packages, plus pipx if pip is
+  # non-empty, plus the cargo toolchain + build deps if cargo is non-empty.
+  local apt_line="$apt_pkgs"
+  if [[ -n "$pip_pkgs" ]]; then
+    apt_line+=" pipx"
+  fi
+  if [[ -n "$cargo_pkgs" ]]; then
+    apt_line+=" cargo build-essential pkg-config libssl-dev"
+  fi
+  apt_line="$(echo "$apt_line" | xargs || true)"  # collapse whitespace
+  if [[ -n "$apt_line" ]]; then
+    echo "RUN apt-get update && apt-get install -y --no-install-recommends $apt_line && rm -rf /var/lib/apt/lists/*"
+  fi
+
+  if [[ -n "$npm_pkgs" ]]; then
+    echo "RUN npm install -g $(echo "$npm_pkgs" | xargs)"
+  fi
+
+  if [[ -n "$pip_pkgs" ]]; then
+    # pipx --global requires pipx >= 1.4. Debian-stable's pipx may be older;
+    # in that case the binaries land in /root/.local/bin and we symlink them
+    # into /usr/local/bin so the runtime user finds them on PATH.
+    local p
+    for p in $pip_pkgs; do
+      echo "RUN pipx install --global \"$p\" 2>/dev/null || (pipx install \"$p\" && ln -sf /root/.local/bin/* /usr/local/bin/)"
+    done
+  fi
+
+  if [[ -n "$cargo_pkgs" ]]; then
+    local c
+    for c in $cargo_pkgs; do
+      echo "RUN cargo install --root /usr/local \"$c\""
+    done
+  fi
+
+  # Do NOT add `USER claude-cask` here: the entrypoint needs to start as
+  # root to set up the gpg-agent bridge before dropping privileges via
+  # gosu. Setting USER skips the root section and signing breaks silently.
+  echo "LABEL claude-cask.user-hash=\"$(user_hash)\""
+}
+
+# Hash inputs that determine staleness of :user: the four manifests
+# plus the base image's content ID. If any drifts, :user is rebuilt.
+user_hash() {
+  local base_id
+  base_id="$(docker image inspect --format '{{.Id}}' claude-cask:latest 2>/dev/null || echo none)"
+  {
+    manifest_read apt
+    echo "---"
+    manifest_read npm
+    echo "---"
+    manifest_read pip
+    echo "---"
+    manifest_read cargo
+    echo "---"
+    echo "$base_id"
+  } | shasum -a 256 | cut -d' ' -f1
+}
+
+if [[ "${CLAUDE_CASK_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    list)
+      shift
+      [[ $# -eq 0 ]] || { echo "claude-cask: 'list' takes no arguments" >&2; exit 2; }
+      extras_list
+      exit 0
+      ;;
+    install)
+      shift
+      extras_install "$@"
+      exit $?
+      ;;
+    remove)
+      shift
+      extras_remove "$@"
+      exit $?
+      ;;
+  esac
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)           MODEL="$2"; shift 2 ;;
     --auto)            AUTO_MODE=1; shift ;;
-    --rebuild)         REBUILD=1; shift ;;
+    --rebuild)         REBUILD=1; EXPLICIT_REBUILD=1; shift ;;
+    --update-claude-code) UPDATE_CC=1; shift ;;
     --keep-container)  KEEP_CONTAINER=1; shift ;;
+    --bare)            BARE=1; shift ;;
     -h|--help)         usage; exit 0 ;;
     --)                shift; EXTRA_ARGS+=("$@"); break ;;
     -*)                echo "claude-cask: unknown flag '$1' (use -- to pass flags through to claude)" >&2; exit 2 ;;
@@ -104,6 +484,27 @@ GPG_SIGN="$(git config --get commit.gpgsign || echo false)"
 # doesn't match what's on disk now, the image is stale and we rebuild.
 SRC_HASH="$(cat "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/entrypoint.sh" | shasum -a 256 | cut -d' ' -f1)"
 
+if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
+  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
+  cc_version="$(npm view @anthropic-ai/claude-code version)"
+  [[ -n "$cc_version" ]] || { echo "claude-cask: failed to resolve claude-code version via npm view" >&2; exit 1; }
+  acquire_extras_lock
+  docker build \
+    --build-arg "USER_UID=$HOST_UID" \
+    --build-arg "USER_GID=$HOST_GID" \
+    --build-arg "IMAGE_HASH=$SRC_HASH" \
+    --build-arg "CLAUDE_CODE_VERSION=$cc_version" \
+    -t "$IMAGE" "$SCRIPT_DIR"
+  if ! manifests_all_empty; then
+    if ! build_user_image; then
+      echo "claude-cask: docker build failed for claude-cask:user" >&2
+      exit 1
+    fi
+  fi
+  echo "claude-cask: claude-code updated to $cc_version"
+  exit 0
+fi
+
 # Auto-rebuild when the existing image is stale relative to the host:
 # either the user/group don't match (UID drift after switching machines)
 # or the Dockerfile/entrypoint have been edited since the last build.
@@ -120,6 +521,12 @@ if [[ $REBUILD -eq 0 ]] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
   fi
 fi
 
+# When the user explicitly asked --rebuild, serialize against concurrent
+# install/remove/--rebuild so we don't redundantly rebuild :latest twice.
+if [[ "${EXPLICIT_REBUILD:-0}" -eq 1 ]]; then
+  acquire_extras_lock
+fi
+
 if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build \
     --build-arg "USER_UID=$HOST_UID" \
@@ -132,6 +539,35 @@ if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker image prune -f --filter "label=claude-cask.uid" >/dev/null 2>&1 || true
 fi
 
+if [[ "${EXPLICIT_REBUILD:-0}" -eq 1 ]]; then
+  if ! manifests_all_empty; then
+    if ! build_user_image; then
+      echo "claude-cask: docker build failed for claude-cask:user" >&2
+      exit 1
+    fi
+    echo "claude-cask: rebuilt claude-cask:latest and claude-cask:user"
+  else
+    echo "claude-cask: rebuilt claude-cask:latest"
+  fi
+  exit 0
+fi
+
+# --- :user image selection -------------------------------------------------
+# If any manifest is non-empty, run with :user. Rebuild if its label hash
+# is stale (manifests changed, or :latest was rebuilt under us).
+if ! manifests_all_empty && [[ "${BARE:-0}" -eq 0 ]]; then
+  want_hash="$(user_hash)"
+  user_label="$(docker image inspect --format '{{ index .Config.Labels "claude-cask.user-hash" }}' claude-cask:user 2>/dev/null || true)"
+  if [[ "$user_label" != "$want_hash" ]]; then
+    echo "claude-cask: :user image stale or missing — rebuilding" >&2
+    if ! build_user_image; then
+      echo "claude-cask: docker build failed for claude-cask:user" >&2
+      exit 1
+    fi
+  fi
+  IMAGE="claude-cask:user"
+fi
+
 GPG_MOUNTS=()
 GPG_ENV=()
 TMP_KEY_DIR=""
@@ -141,6 +577,7 @@ cleanup() {
   if [[ -n "$TMP_KEY_DIR" && -d "$TMP_KEY_DIR" ]]; then
     rm -rf "$TMP_KEY_DIR"
   fi
+  release_extras_lock
   return 0
 }
 trap cleanup EXIT
@@ -299,6 +736,26 @@ DOCKER_ARGS+=("$IMAGE" "${CLAUDE_ARGS[@]}")
     echo "  signing:      disabled (no host user.signingkey)"
   fi
   echo "  network:      open (full outbound)"
+  apt_n=$(manifest_read apt | wc -l | tr -d ' ')
+  npm_n=$(manifest_read npm | wc -l | tr -d ' ')
+  pip_n=$(manifest_read pip | wc -l | tr -d ' ')
+  cargo_n=$(manifest_read cargo | wc -l | tr -d ' ')
+  parts=()
+  [[ $apt_n   -gt 0 ]] && parts+=("$apt_n apt")
+  [[ $npm_n   -gt 0 ]] && parts+=("$npm_n npm")
+  [[ $pip_n   -gt 0 ]] && parts+=("$pip_n pip")
+  [[ $cargo_n -gt 0 ]] && parts+=("$cargo_n cargo")
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    echo "  extras:       none  ($IMAGE)"
+  elif [[ "${BARE:-0}" -eq 1 ]]; then
+    joined="$(printf '%s, ' "${parts[@]}")"
+    joined="${joined%, }"
+    echo "  extras:       skipped (--bare) — $joined in manifest"
+  else
+    joined="$(printf '%s, ' "${parts[@]}")"
+    joined="${joined%, }"
+    echo "  extras:       $joined  ($IMAGE)"
+  fi
   # Surface FileVault state on macOS — SECURITY.md treats "FileVault on" as
   # the assumption that makes a persistent credentials file at rest roughly
   # equivalent to the keychain. If it's off, the user should know.
