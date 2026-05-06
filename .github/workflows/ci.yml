@@ -14,7 +14,10 @@ jobs:
       - name: Install bats
         run: sudo apt-get update && sudo apt-get install -y bats
       - name: Run bats suite
-        run: bats tests/
+        # Glob limits the run to tests/*.bats and skips tests/integration/,
+        # whose smoke.bats builds the docker image end-to-end and is meant
+        # for local execution rather than CI.
+        run: bats tests/*.bats
 
   shellcheck:
     name: shellcheck
