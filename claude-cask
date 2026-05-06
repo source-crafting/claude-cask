@@ -371,7 +371,9 @@ render_user_dockerfile() {
     done
   fi
 
-  echo "USER claude-cask"
+  # Do NOT add `USER claude-cask` here: the entrypoint needs to start as
+  # root to set up the gpg-agent bridge before dropping privileges via
+  # gosu. Setting USER skips the root section and signing breaks silently.
   echo "LABEL claude-cask.user-hash=\"$(user_hash)\""
 }
 
