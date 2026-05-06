@@ -234,7 +234,7 @@ manifest_restore() {
   local mode=""
   while IFS= read -r line; do
     case "$line" in
-      "==FILE=="*)   eco="${line#==FILE==}"; mode=file; buf="" ;;
+      "==FILE=="*)   eco="${line#==FILE==}"; mode="file"; buf="" ;;
       "==ABSENT=="*) eco="${line#==ABSENT==}"; rm -f "$(manifest_path "$eco")"; mode="" ;;
       "==END==")     printf '%s' "$buf" > "$(manifest_path "$eco")"; mode="" ;;
       *)             [[ "$mode" == file ]] && buf+="$line"$'\n' ;;
