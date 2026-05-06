@@ -45,6 +45,9 @@ claude-cask - run Claude Code inside a Docker container
 USAGE:
   claude-cask [--model NAME] [--auto] [--rebuild]
               [--keep-container] [-- <args passed to claude>]
+  claude-cask install --apt|--npm|--pip|--cargo PKG [PKG...]
+  claude-cask remove  --apt|--npm|--pip|--cargo PKG [PKG...]
+  claude-cask list
 
 OPTIONS:
   --model NAME      Model to use (default: opus)
@@ -68,6 +71,21 @@ OPTIONS:
   --bare            Launch with claude-cask:latest even when user-extras
                     manifests are populated (skips claude-cask:user).
   -h, --help        Show this help
+
+USER-EXTRAS SUBCOMMANDS:
+  install --<eco> PKG [PKG...]
+                    Add one or more packages to the <eco> manifest and
+                    rebuild claude-cask:user on top of :latest. Manifests
+                    persist under ~/.config/claude-cask/<eco>.list and
+                    are layered into the container at launch.
+  remove  --<eco> PKG [PKG...]
+                    Remove the named packages from the <eco> manifest and
+                    rebuild claude-cask:user. If all manifests become
+                    empty, claude-cask:user is untagged.
+  list              Print the current contents of every manifest, grouped
+                    by ecosystem. Exits non-zero only on an internal error.
+
+  Ecosystem flags: --apt | --npm | --pip | --cargo
 
 The current working directory is mounted at the same path inside the container.
 Host ~/.claude is forwarded; one configured GPG signing key is forwarded.
