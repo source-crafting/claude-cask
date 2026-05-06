@@ -622,9 +622,11 @@ case "$1 $2 $3" in
 esac
 exit 0'
 
-  # Empty PATH so the launcher can't find npm. The git/docker stubs are
-  # invoked via $STUB_BIN, so we keep that on PATH.
-  PATH="$STUB_BIN" run bash "$REPO_ROOT/claude-cask" --update-claude-code
+  # Empty PATH so the launcher can't find npm. We invoke bash via $BASH
+  # (absolute path) rather than the bare command name because PATH=$STUB_BIN
+  # would otherwise prevent `bats run` from finding bash itself, masking
+  # the launcher's intended "requires npm" error with a generic exit 127.
+  PATH="$STUB_BIN" run "$BASH" "$REPO_ROOT/claude-cask" --update-claude-code
   [ "$status" -ne 0 ]
   echo "$output" | grep -q "requires npm on host PATH"
   ! grep -q "^docker build" "$STUB_LOG"
