@@ -1,5 +1,7 @@
 FROM node:24.15.0-slim
 
+# Reproducibility comes from the pinned base image tag, not per-package pins.
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git \
@@ -43,6 +45,7 @@ LABEL claude-cask.image-hash="${IMAGE_HASH}"
 # owns it (e.g., the base image's `node` user at UID 1000), then create
 # claude-cask. Pre-create the home dotdirs that get bind-mounted into so
 # they exist as mountpoints owned by claude-cask before mounts are applied.
+# hadolint ignore=DL4006
 RUN set -e \
  && existing_user="$(getent passwd "${USER_UID}" | cut -d: -f1)" \
  && [ -n "$existing_user" ] && userdel --remove "$existing_user" 2>/dev/null || true \
