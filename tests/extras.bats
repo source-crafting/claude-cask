@@ -6,6 +6,12 @@ setup() {
   stub_init
   HOME="$(mktemp -d)"
   export HOME
+  # Pin XDG_CONFIG_HOME under the test's tmpdir HOME. Without this, a
+  # runner that exports XDG_CONFIG_HOME (some CI setups do) would route
+  # the launcher's $EXTRAS_DIR to the host's real config dir instead of
+  # the isolated tmpdir, breaking every manifest-touching test.
+  XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_CONFIG_HOME
   exec </dev/null
 }
 

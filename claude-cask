@@ -459,6 +459,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If --update-claude-code was requested, bail early when npm is missing
+# from PATH. Every other check below this point shells out to system
+# tools (id, git, cat, shasum, cut) that may be deliberately stripped
+# from $PATH in tests; running the npm guard first ensures we surface
+# the intended "requires npm" error rather than a generic 127.
+if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
+  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
+fi
+
 command -v docker >/dev/null 2>&1 || { echo "claude-cask: docker not found in PATH" >&2; exit 1; }
 
 # The container runs as a non-root user whose UID/GID match the host user
@@ -479,14 +488,6 @@ GPG_SIGN="$(git config --get commit.gpgsign || echo false)"
 
 [[ -n "$GIT_NAME"  ]] || { echo "claude-cask: git user.name not set on host"  >&2; exit 1; }
 [[ -n "$GIT_EMAIL" ]] || { echo "claude-cask: git user.email not set on host" >&2; exit 1; }
-
-# If --update-claude-code was requested, bail early when npm is missing
-# from PATH. The SRC_HASH calc below would otherwise fail with exit 127
-# (cat/shasum/cut not found) instead of the intended "requires npm" error
-# whenever the caller's PATH excludes system tools.
-if [[ "${UPDATE_CC:-0}" -eq 1 ]]; then
-  command -v npm >/dev/null 2>&1 || { echo "claude-cask: --update-claude-code requires npm on host PATH" >&2; exit 1; }
-fi
 
 # Hash the contents of the build context (per .dockerignore: Dockerfile +
 # entrypoint.sh). If the hash recorded in the existing image's label
