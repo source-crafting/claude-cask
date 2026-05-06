@@ -329,10 +329,10 @@ extras_remove() {
   if manifests_all_empty; then
     if ! docker image inspect claude-cask:user >/dev/null 2>&1; then
       echo "claude-cask: all manifests empty; claude-cask:user already absent"
-    elif docker rmi claude-cask:user >/dev/null 2>&1; then
+    elif rmi_err="$(docker rmi claude-cask:user 2>&1)"; then
       echo "claude-cask: all manifests empty; claude-cask:user untagged"
     else
-      echo "claude-cask: all manifests empty, but claude-cask:user removal failed (in use?)" >&2
+      echo "claude-cask: all manifests empty, but claude-cask:user removal failed: ${rmi_err:-unknown error}" >&2
       exit 1
     fi
     return 0

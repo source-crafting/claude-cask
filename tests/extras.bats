@@ -648,3 +648,45 @@ exit 0'
   echo "$output" | grep -q "claude-cask:user already absent"
   ! grep -q "^docker rmi claude-cask:user" "$STUB_LOG"
 }
+
+@test "remove of last package surfaces rmi stderr when removal fails" {
+  # docker stub: image inspect succeeds but rmi fails with a recognizable
+  # diagnostic on stderr. The launcher should propagate that diagnostic
+  # rather than guess "in use?".
+  stub_set docker '#!/usr/bin/env bash
+{ printf "docker"; printf " %s" "$@"; printf "\n"; } >> "$STUB_LOG"
+case "$1 $2" in
+  "image inspect") exit 0 ;;
+  "rmi "*)
+    echo "Error response from daemon: conflict: container abc123 is using image" >&2
+    exit 1 ;;
+esac
+exit 0'
+  stub_set git '#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "config --get user.name")  echo "Test User"; exit 0 ;;
+  "config --get user.email") echo "test@example.com"; exit 0 ;;
+esac
+exit 0'
+
+  mkdir -p "$HOME/.config/claude-cask"
+  echo "ripgrep" > "$HOME/.config/claude-cask/apt.list"
+
+  PATH="$STUB_BIN:$PATH" run bash "$REPO_ROOT/claude-cask" remove --apt ripgrep
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "claude-cask:user removal failed:"
+  echo "$output" | grep -q "container abc123 is using image"
+}
+
+@test "_join_sorted handles zero / one / many args and sorts alphabetically" {
+  CLAUDE_CASK_SOURCE_ONLY=1 source "$REPO_ROOT/claude-cask"
+
+  [ -z "$(_join_sorted)" ]
+  [ "$(_join_sorted lonely)" = "lonely" ]
+  [ "$(_join_sorted ripgrep jq httpie)" = "httpie, jq, ripgrep" ]
+
+  # Idempotent: repeated args produce the same output (sort is not -u, so
+  # duplicates pass through, which is what manifest_add/remove want when
+  # they call it on already-deduplicated arrays).
+  [ "$(_join_sorted dup dup)" = "dup, dup" ]
+}
